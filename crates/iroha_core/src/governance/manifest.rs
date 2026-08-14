@@ -24,7 +24,11 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     account::AccountId,
-    nexus::{DataSpaceId, LaneCatalog, LaneId, LaneStorageProfile, LaneVisibility},
+    nexus::{
+        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
+        AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile,
+        LaneVisibility,
+    },
     peer::PeerId,
     prelude::Name,
 };
@@ -299,6 +303,36 @@ pub struct GovernanceRules {
     pub protected_namespaces: BTreeSet<Name>,
     /// Typed governance hooks with optional raw values for unknown entries.
     pub hooks: GovernanceHooks,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DataspaceManifestAuthority {
+    validators: Vec<AccountId>,
+    validator_bindings: Vec<(AccountId, PeerId)>,
+    quorum: Option<u32>,
+}
+
+impl DataspaceManifestAuthority {
+    fn from_rules(rules: &GovernanceRules) -> Option<Self> {
+        if rules.validators.is_empty() {
+            return None;
+        }
+
+        let mut validators = rules.validators.clone();
+        validators.sort();
+        let mut validator_bindings = rules
+            .validator_bindings
+            .iter()
+            .map(|binding| (binding.validator.clone(), binding.peer_id.clone()))
+            .collect::<Vec<_>>();
+        validator_bindings.sort();
+
+        Some(Self {
+            validators,
+            validator_bindings,
+            quorum: rules.quorum,
+        })
+    }
 }
 
 /// Explicit validator binding declared in an admin-managed lane manifest.
@@ -1583,12 +1617,63 @@ impl LaneManifestRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`GovernanceGuardError`] for an unknown lane or an active
-    /// governed/private lane without a valid frozen source binding.
+    /// Returns [`GovernanceGuardError`] for an unknown lane, an active
+    /// governed/private lane without a valid frozen source binding, or
+    /// conflicting roster-bearing manifests in one physical dataspace.
     pub fn validate_active_coverage(&self) -> Result<(), GovernanceGuardError> {
         for lane_id in self.statuses.keys().copied() {
             self.ensure_lane_ready(lane_id)?;
         }
+        let mut checked_dataspaces = BTreeSet::new();
+        for status in self.statuses.values() {
+            if checked_dataspaces.insert(status.dataspace) {
+                self.dataspace_authority_rules(status.lane, status.dataspace)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate active manifest coverage using the catalog's authority boundaries.
+    ///
+    /// Static lanes share manifest authority with other static lanes in the same
+    /// physical dataspace. Autoscale-managed lanes carry an immutable, lane-local
+    /// committee and are therefore validated independently, even when they use the
+    /// same physical dataspace as a static lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GovernanceGuardError`] when a catalog lane is unknown, cannot
+    /// enforce its configured manifest semantics, or conflicts with another
+    /// static lane's manifest authority in the same dataspace.
+    pub fn validate_active_coverage_for_catalog(
+        &self,
+        lane_catalog: &LaneCatalog,
+    ) -> Result<(), GovernanceGuardError> {
+        let mut static_lanes_by_dataspace = BTreeMap::<DataSpaceId, BTreeSet<LaneId>>::new();
+
+        for lane in lane_catalog.lanes() {
+            self.ensure_lane_ready(lane.id)?;
+            if lane_uses_reserved_autoscale_metadata(lane) {
+                self.dataspace_authority_rules_for_lanes(
+                    lane.id,
+                    lane.dataspace_id,
+                    &BTreeSet::from([lane.id]),
+                )?;
+            } else {
+                static_lanes_by_dataspace
+                    .entry(lane.dataspace_id)
+                    .or_default()
+                    .insert(lane.id);
+            }
+        }
+
+        for (dataspace_id, lanes) in static_lanes_by_dataspace {
+            let target_lane = *lanes
+                .first()
+                .expect("static dataspace group must contain at least one lane");
+            self.dataspace_authority_rules_for_lanes(target_lane, dataspace_id, &lanes)?;
+        }
+
         Ok(())
     }
 
@@ -1625,6 +1710,88 @@ impl LaneManifestRegistry {
         self.status(lane_id).and_then(LaneManifestStatus::rules)
     }
 
+    /// Resolve the validator pool declared for a lane's physical dataspace.
+    ///
+    /// Policy-only manifests do not declare authority and are skipped. Every
+    /// roster-bearing manifest in one dataspace must describe the same
+    /// validator accounts, account-to-peer bindings, and quorum. Binding URLs
+    /// and lane-local governance policy are deliberately not part of this
+    /// consistency check.
+    pub(crate) fn dataspace_authority_rules(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Result<Option<&GovernanceRules>, GovernanceGuardError> {
+        self.dataspace_authority_rules_inner(lane_id, dataspace_id, None)
+    }
+
+    pub(crate) fn dataspace_authority_rules_for_lanes(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        eligible_lanes: &BTreeSet<LaneId>,
+    ) -> Result<Option<&GovernanceRules>, GovernanceGuardError> {
+        self.dataspace_authority_rules_inner(lane_id, dataspace_id, Some(eligible_lanes))
+    }
+
+    fn dataspace_authority_rules_inner(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        eligible_lanes: Option<&BTreeSet<LaneId>>,
+    ) -> Result<Option<&GovernanceRules>, GovernanceGuardError> {
+        let target_status = self.status(lane_id);
+        if target_status.is_some_and(|status| status.dataspace != dataspace_id) {
+            return Err(GovernanceGuardError::unknown_lane(lane_id));
+        }
+        if let Some(eligible_lanes) = eligible_lanes {
+            for eligible_lane in eligible_lanes {
+                if let Some(status) = self.status(*eligible_lane) {
+                    self.ensure_lane_ready(*eligible_lane)?;
+                    if status.dataspace != dataspace_id {
+                        return Err(GovernanceGuardError::unknown_lane(*eligible_lane));
+                    }
+                }
+            }
+        }
+
+        let mut authority_fingerprint = None;
+        let mut fallback_rules = None;
+        let mut target_rules = None;
+        for status in self
+            .statuses
+            .values()
+            .filter(|status| status.dataspace == dataspace_id)
+            .filter(|status| {
+                eligible_lanes.is_none_or(|eligible_lanes| eligible_lanes.contains(&status.lane))
+            })
+        {
+            let Some(rules) = status.rules() else {
+                continue;
+            };
+            let Some(fingerprint) = DataspaceManifestAuthority::from_rules(rules) else {
+                continue;
+            };
+            if let Some(expected) = authority_fingerprint.as_ref()
+                && expected != &fingerprint
+            {
+                return Err(GovernanceGuardError::dataspace_authority_conflict(
+                    lane_id,
+                    target_status,
+                ));
+            }
+            if authority_fingerprint.is_none() {
+                authority_fingerprint = Some(fingerprint);
+                fallback_rules = Some(rules);
+            }
+            if status.lane == lane_id {
+                target_rules = Some(rules);
+            }
+        }
+
+        Ok(target_rules.or(fallback_rules))
+    }
+
     /// Retrieve the validator set declared for `lane_id`, if present.
     pub fn lane_validators(&self, lane_id: LaneId) -> Option<Vec<AccountId>> {
         self.lane_rules(lane_id)
@@ -1650,6 +1817,13 @@ impl LaneManifestRegistry {
     pub fn statuses(&self) -> Vec<LaneManifestStatus> {
         self.statuses.values().cloned().collect()
     }
+}
+
+fn lane_uses_reserved_autoscale_metadata(lane: &LaneConfig) -> bool {
+    lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
+        || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+        || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
+        || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
 }
 
 /// Governance guard error returned when a lane lacks an active manifest.
@@ -1698,6 +1872,11 @@ impl GovernanceGuardError {
                 self.alias,
                 self.lane.as_u32(),
             ),
+            GovernanceGuardReason::DataspaceAuthorityConflict => format!(
+                "lane \"{}\" ({}) shares a dataspace with conflicting manifest validator pools",
+                self.alias,
+                self.lane.as_u32(),
+            ),
         }
     }
 
@@ -1733,6 +1912,18 @@ impl GovernanceGuardError {
             reason: GovernanceGuardReason::MissingPrivacyCommitments,
         }
     }
+
+    fn dataspace_authority_conflict(lane: LaneId, status: Option<&LaneManifestStatus>) -> Self {
+        Self {
+            lane,
+            alias: status.map_or_else(
+                || format!("lane-{}", lane.as_u32()),
+                |status| status.alias.clone(),
+            ),
+            governance: status.and_then(|status| status.governance.clone()),
+            reason: GovernanceGuardReason::DataspaceAuthorityConflict,
+        }
+    }
 }
 
 /// Reasons surfaced when a lane is gated by governance/manifest checks.
@@ -1744,6 +1935,8 @@ pub enum GovernanceGuardReason {
     MissingManifest,
     /// Lane advertises commitment-only storage but has no privacy commitments configured.
     MissingPrivacyCommitments,
+    /// Roster-bearing manifests in one physical dataspace declare different authority.
+    DataspaceAuthorityConflict,
 }
 
 /// Shared registry handle.
@@ -1777,6 +1970,44 @@ mod tests {
 
     fn account_id_literal(account: &AccountId) -> String {
         account.to_string()
+    }
+
+    fn authority_rules_for_test(
+        validators: Vec<AccountId>,
+        quorum: Option<u32>,
+    ) -> GovernanceRules {
+        let validator_bindings = validators
+            .iter()
+            .map(|validator| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+                torii_url: None,
+            })
+            .collect();
+        GovernanceRules {
+            validators,
+            validator_bindings,
+            quorum,
+            ..GovernanceRules::default()
+        }
+    }
+
+    fn manifest_status_for_test(
+        lane: LaneId,
+        dataspace: DataSpaceId,
+        rules: GovernanceRules,
+    ) -> LaneManifestStatus {
+        LaneManifestStatus {
+            lane,
+            alias: format!("lane-{}", lane.as_u32()),
+            dataspace,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: None,
+            manifest_path: Some(PathBuf::from("/tmp/lane.manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        }
     }
 
     fn digest_fixture_registry(
@@ -2674,6 +2905,10 @@ mod tests {
         let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
         assert!(registry.ensure_lane_ready(LaneId::new(0)).is_ok());
         assert!(registry.ensure_lane_ready(LaneId::new(1)).is_ok());
+        assert!(
+            registry.validate_active_coverage().is_ok(),
+            "matching validator pools may be reused across lanes in one dataspace"
+        );
 
         let core_validators = registry
             .lane_validators(LaneId::new(0))
@@ -2700,6 +2935,204 @@ mod tests {
         );
         assert_eq!(registry.lane_quorum(LaneId::new(0)), Some(2));
         assert_eq!(registry.lane_quorum(LaneId::new(1)), Some(2));
+    }
+
+    #[test]
+    fn dataspace_authority_projection_ignores_policy_only_target_manifest() {
+        let source_lane = LaneId::new(0);
+        let target_lane = LaneId::new(1);
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let source_rules = authority_rules_for_test(vec![ALICE_ID.clone()], Some(1));
+        let registry = LaneManifestRegistry::from_statuses(BTreeMap::from([
+            (
+                source_lane,
+                manifest_status_for_test(source_lane, dataspace, source_rules),
+            ),
+            (
+                target_lane,
+                manifest_status_for_test(target_lane, dataspace, GovernanceRules::default()),
+            ),
+        ]));
+
+        let projected = registry
+            .dataspace_authority_rules(target_lane, dataspace)
+            .expect("policy-only target must not conflict")
+            .expect("source roster must project across its dataspace");
+        assert_eq!(projected.validators, vec![ALICE_ID.clone()]);
+        assert!(registry.validate_active_coverage().is_ok());
+    }
+
+    #[test]
+    fn same_dataspace_manifest_pool_consistency_is_order_insensitive() {
+        let lane_a = LaneId::new(0);
+        let lane_b = LaneId::new(1);
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let rules_a = authority_rules_for_test(vec![ALICE_ID.clone(), BOB_ID.clone()], Some(2));
+        let mut rules_b = authority_rules_for_test(vec![BOB_ID.clone(), ALICE_ID.clone()], Some(2));
+        rules_b.validator_bindings.reverse();
+        for binding in &mut rules_b.validator_bindings {
+            binding.torii_url = Some("https://alternate-route.example".to_owned());
+        }
+        let registry = LaneManifestRegistry::from_statuses(BTreeMap::from([
+            (lane_a, manifest_status_for_test(lane_a, dataspace, rules_a)),
+            (lane_b, manifest_status_for_test(lane_b, dataspace, rules_b)),
+        ]));
+
+        // This compares the owning dataspace's manifest pool. Autoscale's
+        // immutable sampled committee remains a separate State-level concern.
+        assert!(registry.validate_active_coverage().is_ok());
+        assert!(
+            registry
+                .dataspace_authority_rules(lane_b, dataspace)
+                .expect("equivalent pools must resolve")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn conflicting_same_dataspace_manifest_pools_fail_closed() {
+        let lane_a = LaneId::new(0);
+        let lane_b = LaneId::new(1);
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let registry = LaneManifestRegistry::from_statuses(BTreeMap::from([
+            (
+                lane_a,
+                manifest_status_for_test(
+                    lane_a,
+                    dataspace,
+                    authority_rules_for_test(vec![ALICE_ID.clone()], Some(1)),
+                ),
+            ),
+            (
+                lane_b,
+                manifest_status_for_test(
+                    lane_b,
+                    dataspace,
+                    authority_rules_for_test(vec![BOB_ID.clone()], Some(1)),
+                ),
+            ),
+        ]));
+
+        let err = registry
+            .validate_active_coverage()
+            .expect_err("one dataspace cannot advertise conflicting validator pools");
+        assert_eq!(
+            err.reason(),
+            GovernanceGuardReason::DataspaceAuthorityConflict
+        );
+        assert!(
+            registry
+                .dataspace_authority_rules(lane_a, dataspace)
+                .is_err(),
+            "direct runtime lookup must fail closed even if validation was bypassed"
+        );
+    }
+
+    #[test]
+    fn catalog_aware_coverage_separates_static_and_autoscale_authority() {
+        let static_lane_a = LaneId::new(0);
+        let static_lane_b = LaneId::new(1);
+        let autoscale_lane = LaneId::new(2);
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let mut autoscale_config = LaneConfig {
+            id: autoscale_lane,
+            alias: "elastic-2".to_owned(),
+            dataspace_id: dataspace,
+            ..LaneConfig::default()
+        };
+        autoscale_config
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_config
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+        let catalog = LaneCatalog::new(
+            nonzero!(3_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: static_lane_b,
+                    alias: "static-1".to_owned(),
+                    dataspace_id: dataspace,
+                    ..LaneConfig::default()
+                },
+                autoscale_config,
+            ],
+        )
+        .expect("mixed static and autoscale catalog");
+
+        let compatible_static_registry = LaneManifestRegistry::from_statuses(BTreeMap::from([
+            (
+                static_lane_a,
+                manifest_status_for_test(
+                    static_lane_a,
+                    dataspace,
+                    authority_rules_for_test(vec![ALICE_ID.clone()], Some(1)),
+                ),
+            ),
+            (
+                static_lane_b,
+                manifest_status_for_test(
+                    static_lane_b,
+                    dataspace,
+                    authority_rules_for_test(vec![ALICE_ID.clone()], Some(1)),
+                ),
+            ),
+            (
+                autoscale_lane,
+                manifest_status_for_test(
+                    autoscale_lane,
+                    dataspace,
+                    authority_rules_for_test(vec![BOB_ID.clone()], Some(1)),
+                ),
+            ),
+        ]));
+        assert!(
+            compatible_static_registry
+                .validate_active_coverage()
+                .is_err(),
+            "catalog-free validation remains conservative across the whole dataspace"
+        );
+        assert!(
+            compatible_static_registry
+                .validate_active_coverage_for_catalog(&catalog)
+                .is_ok(),
+            "an autoscale lane's exact authority must not conflict with static authority"
+        );
+
+        let conflicting_static_registry = LaneManifestRegistry::from_statuses(BTreeMap::from([
+            (
+                static_lane_a,
+                manifest_status_for_test(
+                    static_lane_a,
+                    dataspace,
+                    authority_rules_for_test(vec![ALICE_ID.clone()], Some(1)),
+                ),
+            ),
+            (
+                static_lane_b,
+                manifest_status_for_test(
+                    static_lane_b,
+                    dataspace,
+                    authority_rules_for_test(vec![BOB_ID.clone()], Some(1)),
+                ),
+            ),
+            (
+                autoscale_lane,
+                manifest_status_for_test(
+                    autoscale_lane,
+                    dataspace,
+                    authority_rules_for_test(vec![BOB_ID.clone()], Some(1)),
+                ),
+            ),
+        ]));
+        let err = conflicting_static_registry
+            .validate_active_coverage_for_catalog(&catalog)
+            .expect_err("static lanes in one dataspace must still share authority");
+        assert_eq!(
+            err.reason(),
+            GovernanceGuardReason::DataspaceAuthorityConflict
+        );
     }
 
     #[test]

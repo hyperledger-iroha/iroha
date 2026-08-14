@@ -127,7 +127,7 @@ use crate::{
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
-        LaneManifestSourceSnapshot,
+        LaneManifestSourceSnapshot, LaneManifestStatus,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
     kura::{
@@ -4906,6 +4906,12 @@ impl Drop for TransactionGuard {
 trait QueueAdmissionStateAccess {
     fn authority_exists(&mut self, authority: &AccountId) -> bool;
 
+    fn manifest_authority_eligible_lanes(
+        &mut self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> BTreeSet<LaneId>;
+
     fn recheck_external_nexus_fee_admission(
         &mut self,
         queue: &Queue,
@@ -4970,6 +4976,19 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
 impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, W> {
     fn authority_exists(&mut self, authority: &AccountId) -> bool {
         self.world.accounts().get(authority).is_some()
+    }
+
+    fn manifest_authority_eligible_lanes(
+        &mut self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> BTreeSet<LaneId> {
+        crate::state::nexus_manifest_authority_eligible_lanes_at_height(
+            lane_id,
+            dataspace_id,
+            self.nexus,
+            self.next_block_height,
+        )
     }
 
     fn recheck_external_nexus_fee_admission(
@@ -11878,7 +11897,7 @@ impl Queue {
         let lane_catalog = self.lane_catalog.read().clone();
         let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(&registry_cfg));
         let initial = Arc::new(source_snapshot.bind(&lane_catalog, &governance));
-        if let Err(err) = initial.validate_active_coverage() {
+        if let Err(err) = initial.validate_active_coverage_for_catalog(&lane_catalog) {
             iroha_logger::warn!(
                 reason = %err,
                 "refusing to install incomplete initial lane-manifest snapshot"
@@ -11907,7 +11926,7 @@ impl Queue {
             let lane_catalog = self.lane_catalog.read().clone();
             let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(&registry_cfg));
             let registry = Arc::new(source_snapshot.bind(&lane_catalog, &governance));
-            if let Err(err) = registry.validate_active_coverage() {
+            if let Err(err) = registry.validate_active_coverage_for_catalog(&lane_catalog) {
                 iroha_logger::warn!(
                     reason = %err,
                     "refusing lane-manifest hot reload without exact active-lane coverage"
@@ -11931,9 +11950,19 @@ impl Queue {
         }
     }
 
-    fn ensure_lane_governance(&self, lane_id: LaneId) -> Result<(), GovernanceGuardError> {
+    fn lane_manifest_admission_snapshot(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        authority_eligible_lanes: &BTreeSet<LaneId>,
+    ) -> Result<(Option<LaneManifestStatus>, Option<GovernanceRules>), GovernanceGuardError> {
         let guard = self.lane_manifests.read();
-        guard.ensure_lane_ready(lane_id)
+        guard.ensure_lane_ready(lane_id)?;
+        let status = guard.status(lane_id).cloned();
+        let authority_rules = guard
+            .dataspace_authority_rules_for_lanes(lane_id, dataspace_id, authority_eligible_lanes)?
+            .cloned();
+        Ok((status, authority_rules))
     }
 
     fn enforcement_error(alias: &str, reason: impl Into<String>) -> Error {
@@ -15058,32 +15087,58 @@ impl Queue {
 
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
-        let manifest_status = {
-            let guard = self.lane_manifests.read();
-            guard.status(lane_id).cloned()
+        let manifest_authority_eligible_lanes =
+            state_access.manifest_authority_eligible_lanes(lane_id, dataspace_id);
+        if !manifest_authority_eligible_lanes.contains(&lane_id) {
+            let alias = self
+                .lane_catalog
+                .read()
+                .lanes()
+                .iter()
+                .find(|lane| lane.id == lane_id)
+                .map_or_else(
+                    || format!("lane-{}", lane_id.as_u32()),
+                    |lane| lane.alias.clone(),
+                );
+            return Err(Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err: Self::enforcement_error(
+                    &alias,
+                    "lane is not active in the routed dataspace at the next block height",
+                ),
+            });
+        }
+        let (manifest_status, manifest_authority_rules) = match self
+            .lane_manifest_admission_snapshot(
+                lane_id,
+                dataspace_id,
+                &manifest_authority_eligible_lanes,
+            ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                let reason = err.message();
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    reason,
+                    "rejecting transaction while governance manifest authority is unavailable"
+                );
+                #[cfg(feature = "telemetry")]
+                telemetry_handle.record_manifest_admission("missing_manifest");
+                return Err(Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err: Error::Governance(err),
+                });
+            }
         };
         let lane_alias = manifest_status.as_ref().map_or_else(
             || format!("lane-{}", lane_id.as_u32()),
             |status| status.alias.clone(),
         );
-        if let Err(err) = self.ensure_lane_governance(lane_id) {
-            let reason = err.message();
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                reason,
-                "rejecting transaction while governance manifest is missing"
-            );
-            #[cfg(feature = "telemetry")]
-            telemetry_handle.record_manifest_admission("missing_manifest");
-            return Err(Failure {
-                tx: Box::new(checked.as_accepted().clone()),
-                err: Error::Governance(err),
-            });
-        }
         if let Some(status) = manifest_status {
             if status.governance.is_some()
-                && let Some(rules) = status.rules()
+                && let Some(policy_rules) = status.rules()
             {
+                let authority_rules = manifest_authority_rules.as_ref().unwrap_or(policy_rules);
                 let alias = status.alias.clone();
                 let allows_multisig_envelope_authority =
                     match checked.as_accepted().as_ref().instructions() {
@@ -15096,12 +15151,12 @@ impl Queue {
                         | Executable::Batch(_) => false,
                     };
                 let governance_sensitive =
-                    Self::tx_requires_manifest_validator_gating(rules, &checked);
+                    Self::tx_requires_manifest_validator_gating(policy_rules, &checked);
                 if governance_sensitive {
-                    let manifest_validators = if rules.validators.is_empty() {
+                    let manifest_validators = if authority_rules.validators.is_empty() {
                         None
                     } else {
-                        match Self::canonical_manifest_validators(&alias, rules) {
+                        match Self::canonical_manifest_validators(&alias, authority_rules) {
                             Ok(validators) => Some(validators),
                             Err(err) => {
                                 #[cfg(feature = "telemetry")]
@@ -15161,9 +15216,10 @@ impl Queue {
                         }
                     }
                     let quorum_required = !allows_multisig_envelope_authority
-                        && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
-                        && !rules.validators.is_empty();
-                    let quorum_result = Self::enforce_manifest_quorum(&alias, rules, &checked);
+                        && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                        && !authority_rules.validators.is_empty();
+                    let quorum_result =
+                        Self::enforce_manifest_quorum(&alias, authority_rules, &checked);
                     if quorum_required {
                         match quorum_result {
                             Ok(()) => {
@@ -15191,12 +15247,12 @@ impl Queue {
                     }
                 }
                 let protected_namespace_result =
-                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked);
+                    Self::enforce_manifest_protected_namespaces(&alias, policy_rules, &checked);
                 let protected_namespace_applied = match protected_namespace_result {
                     Ok(applied) => applied,
                     Err(err) => {
                         #[cfg(feature = "telemetry")]
-                        if !rules.protected_namespaces.is_empty() {
+                        if !policy_rules.protected_namespaces.is_empty() {
                             telemetry_handle.record_protected_namespace_enforcement("rejected");
                         }
                         #[cfg(feature = "telemetry")]
@@ -15214,7 +15270,7 @@ impl Queue {
                 #[cfg(not(feature = "telemetry"))]
                 let _ = protected_namespace_applied;
                 let runtime_hook_result =
-                    Self::enforce_runtime_upgrade_hook(&alias, rules, &checked);
+                    Self::enforce_runtime_upgrade_hook(&alias, policy_rules, &checked);
                 let runtime_hook_applied = match runtime_hook_result {
                     Ok(applied) => applied,
                     Err(err) => {
@@ -19862,7 +19918,7 @@ impl Queue {
                 .read()
                 .rebind(&lane_catalog, &nexus.governance),
         );
-        if let Err(err) = registry.validate_active_coverage() {
+        if let Err(err) = registry.validate_active_coverage_for_catalog(&lane_catalog) {
             iroha_logger::warn!(
                 reason = %err,
                 "rebound lane-manifest snapshot is incomplete; affected ingress remains fail-closed"
@@ -19912,7 +19968,7 @@ impl Queue {
                 .read()
                 .rebind(&lane_catalog, &nexus.governance),
         );
-        if let Err(err) = registry.validate_active_coverage() {
+        if let Err(err) = registry.validate_active_coverage_for_catalog(&lane_catalog) {
             iroha_logger::warn!(
                 reason = %err,
                 "rebound lane-manifest snapshot is incomplete; affected ingress remains fail-closed"
@@ -21670,6 +21726,446 @@ pub mod tests {
             _tx: &dyn TransactionRoutingView,
         ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
             self.current().map(|route| Some(RoutingPlan::single(route)))
+        }
+    }
+
+    struct PolicyOnlyDataspaceQueueFixture {
+        queue: Queue,
+        state: State,
+        primary: AccountId,
+        primary_keypair: KeyPair,
+        secondary: AccountId,
+        outsider: AccountId,
+        outsider_keypair: KeyPair,
+        policy_metadata_key: Name,
+    }
+
+    fn policy_only_dataspace_queue_fixture(
+        time_source: &TimeSource,
+        conflicting_lane_is_active: bool,
+        autoscale_lane: Option<(LaneId, u64)>,
+    ) -> PolicyOnlyDataspaceQueueFixture {
+        let authority_lane = LaneId::SINGLE;
+        let policy_lane = LaneId::new(1);
+        let conflicting_lane = LaneId::new(2);
+        let dataspace = DataSpaceId::UNIVERSAL;
+        let router = Arc::new(MutableRouter::new(RoutingDecision::new(
+            policy_lane,
+            dataspace,
+        )));
+        let mut routes = vec![(policy_lane, dataspace)];
+        if conflicting_lane_is_active {
+            routes.push((conflicting_lane, dataspace));
+        }
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), time_source, router, &routes);
+
+        let (primary, primary_keypair) = gen_account_in("wonderland");
+        let (secondary, _) = gen_account_in("wonderland");
+        let (outsider, outsider_keypair) = gen_account_in("wonderland");
+        let (conflicting_validator, _) = gen_account_in("wonderland");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        for authority in [&primary, &secondary, &outsider, &conflicting_validator] {
+            register_test_authority(&mut state, authority);
+        }
+
+        let mut lane_catalog = queue.lane_catalog.read().as_ref().clone();
+        if let Some((autoscale_lane, created_height)) = autoscale_lane {
+            let mut lanes = lane_catalog.lanes().to_vec();
+            let lane = lanes
+                .iter_mut()
+                .find(|lane| lane.id == autoscale_lane)
+                .expect("autoscale fixture lane is present");
+            lane.alias = format!("elastic-lane-{}", autoscale_lane.as_u32());
+            lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+                "true".to_owned(),
+            );
+            lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                created_height.to_string(),
+            );
+            crate::state::attach_synthetic_autoscale_committee_for_test(lane);
+            lane_catalog = LaneCatalog::new(lane_catalog.lane_count(), lanes)
+                .expect("autoscale queue fixture lane catalog");
+        }
+        let dataspace_catalog = queue.dataspace_catalog.read().as_ref().clone();
+        let mut nexus = Nexus::default();
+        nexus.enabled = true;
+        if let Some((autoscale_lane, _)) = autoscale_lane {
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes =
+                NonZeroU32::new(autoscale_lane.as_u32()).expect("nonzero autoscale lane id");
+            nexus.autoscale.max_lanes = NonZeroU32::new(autoscale_lane.as_u32().saturating_add(1))
+                .expect("nonzero autoscale upper bound");
+        } else {
+            nexus.autoscale.enabled = false;
+        }
+        nexus.lane_catalog = lane_catalog.clone();
+        nexus.configured_lane_catalog = lane_catalog;
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = dataspace_catalog;
+        nexus.routing_policy.default_lane = policy_lane;
+        nexus.routing_policy.default_dataspace = dataspace;
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        queue.install_test_router_metadata_for_nexus(&nexus);
+        *state.nexus.write() = nexus;
+
+        let policy_metadata_key =
+            Name::from_str("target_upgrade_id").expect("static target policy metadata key");
+        let target_rules = GovernanceRules {
+            hooks: GovernanceHooks {
+                runtime_upgrade: Some(RuntimeUpgradeHook {
+                    allow: true,
+                    require_metadata: true,
+                    metadata_key: Some(policy_metadata_key.clone()),
+                    allowed_ids: Some(BTreeSet::from([RUNTIME_UPGRADE_ALLOWED_ID.to_owned()])),
+                }),
+                ..GovernanceHooks::default()
+            },
+            ..GovernanceRules::default()
+        };
+        let authority_rules = GovernanceRules {
+            validators: vec![primary.clone(), secondary.clone()],
+            quorum: Some(2),
+            ..GovernanceRules::default()
+        };
+        let conflicting_rules = GovernanceRules {
+            validators: vec![conflicting_validator],
+            quorum: Some(1),
+            ..GovernanceRules::default()
+        };
+        let status = |lane, alias: &str, rules| LaneManifestStatus {
+            lane,
+            alias: alias.to_owned(),
+            dataspace,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_owned()),
+            manifest_path: Some(PathBuf::from(format!("/tmp/{alias}.manifest.json"))),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([
+            (
+                authority_lane,
+                status(authority_lane, "authority", authority_rules),
+            ),
+            (policy_lane, status(policy_lane, "policy", target_rules)),
+            (
+                conflicting_lane,
+                status(conflicting_lane, "stale-conflict", conflicting_rules),
+            ),
+        ])));
+        queue.install_lane_manifests(&manifests);
+
+        PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            primary,
+            primary_keypair,
+            secondary,
+            outsider,
+            outsider_keypair,
+            policy_metadata_key,
+        }
+    }
+
+    fn policy_only_runtime_upgrade_metadata(
+        policy_metadata_key: &Name,
+        approver: Option<&AccountId>,
+    ) -> Metadata {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            policy_metadata_key.clone(),
+            Json::new(RUNTIME_UPGRADE_ALLOWED_ID),
+        );
+        if let Some(approver) = approver {
+            metadata.insert(
+                (*super::GOV_APPROVERS_METADATA_KEY).clone(),
+                Json::new(vec![approver.to_string()]),
+            );
+        }
+        metadata
+    }
+
+    #[test]
+    fn policy_only_lane_inherits_active_dataspace_authority_and_ignores_stale_status() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            primary,
+            primary_keypair,
+            secondary,
+            outsider,
+            outsider_keypair,
+            policy_metadata_key,
+        } = policy_only_dataspace_queue_fixture(&time_source, false, None);
+
+        let outsider_tx = accepted_tx_with(
+            outsider,
+            &outsider_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, Some(&secondary)),
+        );
+        let err = queue
+            .push(outsider_tx, state.view())
+            .expect_err("target policy-only lane must inherit validator membership");
+        match err.err {
+            Error::GovernanceNotPermitted { alias, reason } => {
+                assert_eq!(alias, "policy");
+                assert!(
+                    reason.contains("validator set"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected inherited validator rejection, got {other:?}"),
+        }
+
+        let no_quorum_tx = accepted_tx_with(
+            primary.clone(),
+            &primary_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, None),
+        );
+        let err = queue
+            .push(no_quorum_tx, state.view())
+            .expect_err("target policy-only lane must inherit dataspace quorum");
+        match err.err {
+            Error::GovernanceNotPermitted { alias, reason } => {
+                assert_eq!(alias, "policy");
+                assert!(
+                    reason.contains("quorum requires 2"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected inherited quorum rejection, got {other:?}"),
+        }
+
+        let mut missing_policy_metadata = Metadata::default();
+        missing_policy_metadata.insert(
+            (*super::GOV_APPROVERS_METADATA_KEY).clone(),
+            Json::new(vec![secondary.to_string()]),
+        );
+        let missing_policy_tx = accepted_tx_with(
+            primary.clone(),
+            &primary_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            missing_policy_metadata,
+        );
+        let err = queue
+            .push(missing_policy_tx, state.view())
+            .expect_err("authority inheritance must preserve the target-local hook");
+        match err.err {
+            Error::GovernanceNotPermitted { alias, reason } => {
+                assert_eq!(alias, "policy");
+                assert!(
+                    reason.contains("target_upgrade_id"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected target-local policy rejection, got {other:?}"),
+        }
+
+        let admitted_tx = accepted_tx_with(
+            primary,
+            &primary_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, Some(&secondary)),
+        );
+        queue.push(admitted_tx, state.view()).expect(
+            "active dataspace authority and target-local hook should both be satisfied; stale status must be ignored",
+        );
+    }
+
+    #[test]
+    fn policy_only_lane_fails_closed_on_active_dataspace_authority_conflict() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            primary,
+            primary_keypair,
+            secondary,
+            policy_metadata_key,
+            ..
+        } = policy_only_dataspace_queue_fixture(&time_source, true, None);
+        let tx = accepted_tx_with(
+            primary,
+            &primary_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, Some(&secondary)),
+        );
+
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("conflicting active dataspace authority must fail closed");
+        match err.err {
+            Error::Governance(err) => assert_eq!(
+                err.reason(),
+                crate::governance::manifest::GovernanceGuardReason::DataspaceAuthorityConflict
+            ),
+            other => panic!("expected dataspace authority conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn policy_only_lane_fails_closed_when_active_authority_source_manifest_is_missing() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            primary,
+            primary_keypair,
+            secondary,
+            policy_metadata_key,
+            ..
+        } = policy_only_dataspace_queue_fixture(&time_source, true, None);
+        let missing_lane = LaneId::new(2);
+        let mut statuses = queue
+            .lane_manifests
+            .read()
+            .statuses()
+            .into_iter()
+            .map(|status| (status.lane, status))
+            .collect::<BTreeMap<_, _>>();
+        let missing_status = statuses
+            .get_mut(&missing_lane)
+            .expect("active authority source status");
+        missing_status.manifest_path = None;
+        missing_status.governance_rules = None;
+        queue.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+
+        let tx = accepted_tx_with(
+            primary,
+            &primary_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, Some(&secondary)),
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("a missing active authority source must not disable inherited gating");
+        match err.err {
+            Error::Governance(err) => assert_eq!(
+                err.reason(),
+                crate::governance::manifest::GovernanceGuardReason::MissingManifest
+            ),
+            other => panic!("expected missing sibling manifest rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn policy_only_static_lane_ignores_conflicting_active_autoscale_manifest() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            primary,
+            primary_keypair,
+            secondary,
+            policy_metadata_key,
+            ..
+        } = policy_only_dataspace_queue_fixture(&time_source, true, Some((LaneId::new(2), 1)));
+        let tx = accepted_tx_with(
+            primary,
+            &primary_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, Some(&secondary)),
+        );
+
+        queue.push(tx, state.view()).expect(
+            "a conflicting autoscale manifest must not contaminate static dataspace authority",
+        );
+    }
+
+    #[test]
+    fn policy_only_autoscale_lane_keeps_exact_manifest_authority() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            outsider,
+            outsider_keypair,
+            policy_metadata_key,
+            ..
+        } = policy_only_dataspace_queue_fixture(&time_source, false, Some((LaneId::new(1), 1)));
+        seed_committed_height_for_queue_test(&state, 1);
+        let tx = accepted_tx_with(
+            outsider,
+            &outsider_keypair,
+            &time_source,
+            vec![runtime_upgrade_instruction()],
+            policy_only_runtime_upgrade_metadata(&policy_metadata_key, None),
+        );
+
+        queue
+            .push(tx, state.view())
+            .expect("a policy-only autoscale target must not inherit a static sibling's authority");
+    }
+
+    #[test]
+    fn policy_only_future_autoscale_lane_is_rejected_before_manifest_resolution() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let PolicyOnlyDataspaceQueueFixture {
+            queue,
+            state,
+            primary,
+            ..
+        } = policy_only_dataspace_queue_fixture(&time_source, false, Some((LaneId::new(1), 2)));
+        let tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::Time(TimeTriggerEntrypoint {
+                id: "future-autoscale-admission".parse().expect("trigger id"),
+                instructions: ExecutionStep(iroha_primitives::const_vec::ConstVec::from(Vec::<
+                    InstructionBox,
+                >::new(
+                ))),
+                authority: primary,
+            }),
+        ));
+
+        let state_view = state.view();
+        #[cfg(feature = "telemetry")]
+        let telemetry_handle = state_view.telemetry;
+        let mut state_access = EagerAdmissionStateAccess::new(
+            state_view.world(),
+            &state_view.nexus,
+            &state_view.pipeline,
+            1,
+            0,
+        );
+        let err = match queue.prepare_checked_for_enqueue(
+            CheckedTransaction::new_unchecked(tx),
+            RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)),
+            &mut state_access,
+            None,
+            QueueAdmissionPreparationMode::Ordinary,
+            #[cfg(feature = "telemetry")]
+            telemetry_handle,
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("a future autoscale target cannot be admitted early"),
+        };
+        match err.err {
+            Error::GovernanceNotPermitted { reason, .. } => assert!(
+                reason.contains("not active in the routed dataspace at the next block height"),
+                "unexpected inactive-route rejection: {reason}"
+            ),
+            other => panic!("expected inactive manifest-authority rejection, got {other:?}"),
         }
     }
 

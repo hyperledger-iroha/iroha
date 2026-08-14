@@ -239,13 +239,13 @@ fn recovered_next_vote_projection_for_scheduler_fixture(
         validated,
     )
     .expect("exact scheduler fixture WAL Vote seal");
-    let projection = match
-        crate::sumeragi::v2_runtime::project_recovered_lifecycle_next_wal_vote_candidate(
+    let projection =
+        match crate::sumeragi::v2_runtime::project_recovered_lifecycle_next_wal_vote_candidate(
             verified, seal,
         ) {
-        Ok(projection) => projection,
-        Err(_) => panic!("exact scheduler fixture WAL Vote projection"),
-    };
+            Ok(projection) => projection,
+            Err(_) => panic!("exact scheduler fixture WAL Vote projection"),
+        };
     (projection, vote)
 }
 
@@ -264,6 +264,49 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                 )
             })
             .count()
+    }
+
+    /// Add one exact standalone next-WAL-Vote Sign to an existing scheduler fixture.
+    ///
+    /// The candidate, WAL identity, pending binding, and body receipt never
+    /// leave the closed registry. Only its allocated ordinal is observable.
+    pub(super) fn add_recovered_next_vote_scheduler_fixture_for_test(
+        &mut self,
+        coordinator: &mut LifecycleCoordinator,
+        verified: &VerifiedHeightContext,
+        marker: u8,
+    ) -> Option<u128> {
+        let (projection, _) =
+            recovered_next_vote_projection_for_scheduler_fixture(verified, marker);
+        let (owner, ordinal) = projection.admit_into_scheduler_fixture(verified, coordinator)?;
+        let record = coordinator.records.get(&ordinal)?;
+        let (slot, digest) =
+            exact_single_record_slot(record, LifecycleWorkClass::SignVote.capacity_class())?;
+        let address = ConcreteWorkAddress::new(owner, ordinal, slot)?;
+        let work = ConcreteLifecycleWork {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(
+                DurableRecoveredLifecycleNextWalVoteSignWork {
+                    projection,
+                    verified: verified.clone(),
+                    address,
+                    dispatch_key: None,
+                },
+            ),
+        };
+        if !work.validates_at(address)
+            || self
+                .registry_for_test_mut()
+                .entries
+                .insert(address, work)
+                .is_some()
+        {
+            return None;
+        }
+        self.registry_for_test()
+            .attest_ready_recovered_lifecycle_sign(coordinator, ordinal)
+            .ok()?;
+        Some(ordinal)
     }
 
     /// Install one exact recovered Broadcast pair plus an unrelated Ready Sign.
@@ -513,7 +556,6 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
         broadcast.paired_next_sign = Some((next_address, corrupted));
         true
     }
-
 
     /// Assemble and install a genuine ordinary-Proposal validated completion.
     ///

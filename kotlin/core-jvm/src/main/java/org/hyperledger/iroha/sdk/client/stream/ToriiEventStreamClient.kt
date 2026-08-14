@@ -305,15 +305,19 @@ class ToriiEventStreamClient(
 
         private fun appendQueryParameters(target: URI, params: Map<String, String>): URI {
             if (params.isEmpty()) return target
-            val sb = StringBuilder(target.toString())
+            val targetText = target.toString()
+            val fragmentIndex = targetText.indexOf('#').let { if (it >= 0) it else targetText.length }
+            val builder = StringBuilder(targetText.length + 1)
+                .append(targetText, 0, fragmentIndex)
             val query = encodeQuery(params)
             if (target.query.isNullOrEmpty()) {
-                sb.append(if (target.toString().contains("?")) "&" else "?")
+                builder.append(if (builder.indexOf("?") >= 0) "&" else "?")
             } else {
-                sb.append("&")
+                builder.append("&")
             }
-            sb.append(query)
-            return URI.create(sb.toString())
+            builder.append(query)
+            builder.append(targetText, fragmentIndex, targetText.length)
+            return URI.create(builder.toString())
         }
 
         private fun rejectUnsupportedCanonicalResume(

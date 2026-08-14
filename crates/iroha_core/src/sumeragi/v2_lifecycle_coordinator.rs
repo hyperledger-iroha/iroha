@@ -7,6 +7,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "v2_lifecycle_authority.rs"]
 mod authority;
+#[path = "v2_lifecycle_coordinator_support.rs"]
+mod coordinator_support;
+#[cfg(test)]
+pub(crate) use coordinator_support::{
+    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+};
 /// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -58,63 +64,6 @@ mod wal_recovery;
 #[cfg_attr(not(test), allow(dead_code))]
 mod work_registry;
 
-#[cfg(test)]
-/// Reconstruct the ledger source exactly as Rust expands its reviewed providers.
-pub(crate) fn reviewed_lifecycle_ledger_source_for_test() -> &'static str {
-    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SOURCE
-        .get_or_init(|| {
-            let tests = include_str!("v2_lifecycle_ledger_tests.rs")
-                .replacen(
-                    "        include!(\"v2_lifecycle_ledger_tests_durable_recovery_01.rs\");\n",
-                    include_str!("v2_lifecycle_ledger_tests_durable_recovery_01.rs"),
-                    1,
-                )
-                .replacen(
-                    "        include!(\"v2_lifecycle_ledger_tests_durable_recovery_02.rs\");\n",
-                    include_str!("v2_lifecycle_ledger_tests_durable_recovery_02.rs"),
-                    1,
-                )
-                .replacen(
-                    "    include!(\"v2_lifecycle_ledger_tests_frame_and_store.rs\");\n",
-                    include_str!("v2_lifecycle_ledger_tests_frame_and_store.rs"),
-                    1,
-                );
-            include_str!("v2_lifecycle_ledger.rs")
-                .replacen(
-                    "include!(\"v2_lifecycle_ledger_operations.rs\");\n",
-                    include_str!("v2_lifecycle_ledger_operations.rs"),
-                    1,
-                )
-                .replacen(
-                    "include!(\"v2_lifecycle_ledger_store.rs\");\n",
-                    include_str!("v2_lifecycle_ledger_store.rs"),
-                    1,
-                )
-                .replacen(
-                    "include!(\"v2_lifecycle_ledger_tests.rs\");\n",
-                    tests.as_str(),
-                    1,
-                )
-        })
-        .as_str()
-}
-
-#[cfg(test)]
-/// Reconstruct the registry source exactly as Rust expands its reviewed provider.
-pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str {
-    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SOURCE
-        .get_or_init(|| {
-            include_str!("v2_lifecycle_work_registry.rs").replacen(
-                "include!(\"v2_lifecycle_work_registry_recovered_wal.rs\");\n",
-                include_str!("v2_lifecycle_work_registry_recovered_wal.rs"),
-                1,
-            )
-        })
-        .as_str()
-}
-
 use authority::AuthenticatedEpisodeAuthority;
 #[cfg(test)]
 pub(crate) use authority::RolloverSnapshot;
@@ -126,15 +75,21 @@ use body_pipeline_transition::{
     durable_validate_payload_is_exact,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
+#[cfg(test)]
+pub(in crate::sumeragi) use launch::ProductionPreparedCertifiedServeTestSettlementV1;
 #[allow(unused_imports)]
 pub(in crate::sumeragi) use launch::{
     ActivatedProductionLifecycleV1, FinalizedProductionLifecycleRolloverV1,
     LaunchedProductionLifecycleV1, ProductionLifecycleActivationErrorV1,
-    ProductionLifecycleCleanupReadyV1, ProductionLifecycleFinalizationErrorV1,
-    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleLaunchErrorV1,
+    ProductionLifecycleCleanupReadyV1, ProductionLifecycleCompletionSelectionV1,
+    ProductionLifecycleCompletionTurnV1, ProductionLifecycleFinalizationErrorV1,
+    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleIngressSelectionV1,
+    ProductionLifecycleIngressTurnV1, ProductionLifecycleLaunchErrorV1,
     ProductionLifecycleLaunchInputsV1, ProductionLifecycleOutputRolloverPermitV1,
-    ProductionLifecyclePostOutputHandoffV1,
+    ProductionLifecyclePostOutputHandoffV1, ProductionLifecyclePreActivationErrorV1,
+    ProductionLifecyclePreparedLocalProposalStateV1,
     ProductionLifecycleServeRetirementAuthenticationPermitV1,
+    ProductionPendingKuraApplyInstallErrorV1, ProductionPreparedOrdinaryIngressTurnV1,
     ProductionRecoveredDecisionApplyCompletionErrorV1,
     ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
@@ -142,6 +97,7 @@ pub(in crate::sumeragi) use launch::{
     ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1,
     ProductionRecoveredLifecycleSignBroadcastPreparationV1,
     ProductionRecoveredLifecycleSignBroadcastSettlementV1,
+    ProductionRecoveredLifecycleSignCompletionSelectionV1,
     ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
     ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
 };
@@ -212,6 +168,7 @@ pub(crate) use scheduler_inputs::{
     ProductionIngressTurnPreparation, ProductionSchedulerInputsError, QueuedProductionIngressFetch,
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
+    ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
     ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
     ProductionRecoveredDecisionFetchDispatchErrorV1, ProductionRecoveredDecisionFetchDispatchV1,
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
@@ -1005,15 +962,25 @@ impl LifecycleCoordinator {
         let capacity_waits: BTreeMap<_, _> = output_classes
             .iter()
             .filter_map(|(ordinal, class)| {
-                (*class).and_then(|class| {
-                    self.first_capacity_wait(&BTreeMap::from([(class, 1)]))
-                        .map(|wait| (*ordinal, wait))
-                })
+                ready_rows
+                    .get(ordinal)
+                    .is_some_and(SchedulerReadyInputs::physical_capacity_available)
+                    .then_some(*class)
+                    .flatten()
+                    .and_then(|class| {
+                        self.first_capacity_wait(&BTreeMap::from([(class, 1)]))
+                            .map(|wait| (*ordinal, wait))
+                    })
             })
             .collect();
         let selectable_ready: BTreeSet<_> = prospective_ready
             .iter()
-            .filter(|ordinal| !capacity_waits.contains_key(*ordinal))
+            .filter(|ordinal| {
+                !capacity_waits.contains_key(*ordinal)
+                    && ready_rows
+                        .get(*ordinal)
+                        .is_some_and(SchedulerReadyInputs::physical_capacity_available)
+            })
             .copied()
             .collect();
         let mut ranks = BTreeMap::new();
@@ -2058,6 +2025,24 @@ mod tests {
         );
         assert_eq!(
             scheduler
+                .matches("SchedulerReadyInputs::from_authenticated_waiting_fetch(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            schema
+                .matches("pub(super) fn from_authenticated_waiting_fetch(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            selector
+                .matches("pub(super) fn matches_waiting_record(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            scheduler
                 .matches("SchedulerInputs::from_authenticated(")
                 .count(),
             1
@@ -2239,6 +2224,60 @@ mod tests {
 
         assert_eq!(lease.ordinal(), 2);
         assert_eq!(lease.rank(), selected_rank);
+    }
+
+    #[test]
+    fn physical_capacity_filters_selection_without_removing_ready_rows() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        for seed in [0x31, 0x32] {
+            admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+                seed,
+                LifecycleWorkClass::Fetch,
+                LifecyclePhase::Fetch,
+                InitialLifecycleState::Ready,
+                PredecessorScope::Independent,
+            ))));
+        }
+        let inputs = SchedulerInputs::new(
+            [],
+            [
+                (
+                    1,
+                    SchedulerReadyInputs::new(&coordinator.records[&1], None, [0; 6])
+                        .with_physical_capacity_for_test(false),
+                ),
+                (
+                    2,
+                    SchedulerReadyInputs::new(&coordinator.records[&2], None, [100, 0, 0, 0, 0, 0]),
+                ),
+            ],
+        )
+        .expect("two exact physical-capacity rows");
+        let lease = execute(coordinator.plan_turn(inputs));
+        assert_eq!(lease.ordinal(), 2);
+        assert_eq!(coordinator.records[&1].state, LifecycleState::Ready);
+        assert!(coordinator.ready_index.contains(&1));
+
+        assert!(coordinator.rollback_unpublished_turn(&lease));
+        let unavailable = SchedulerInputs::new(
+            [],
+            coordinator.ready_index.iter().map(|ordinal| {
+                (
+                    *ordinal,
+                    SchedulerReadyInputs::new(&coordinator.records[ordinal], None, [0; 6])
+                        .with_physical_capacity_for_test(false),
+                )
+            }),
+        )
+        .expect("the unchanged Ready census remains authenticated");
+        assert_eq!(coordinator.plan_turn(unavailable), TurnPlan::Idle);
+        assert!(
+            coordinator
+                .records
+                .values()
+                .all(|record| record.state == LifecycleState::Ready)
+        );
+        assert_eq!(coordinator.ready_index, BTreeSet::from([1, 2]));
     }
 
     #[test]

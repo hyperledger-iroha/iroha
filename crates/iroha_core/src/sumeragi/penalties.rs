@@ -83,7 +83,10 @@ impl<'a> PenaltyApplier<'a> {
                 continue;
             }
             let (lane_id, validator_id) = key;
-            if nexus_enabled && !self.state.is_lane_active_for_authority(*lane_id) {
+            if nexus_enabled
+                && (!self.state.is_lane_active_for_authority(*lane_id)
+                    || self.state.staking_authority_lane(*lane_id) != Some(*lane_id))
+            {
                 continue;
             }
             candidates_map
@@ -744,7 +747,10 @@ fn jail_in_transaction(
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::{
+        num::{NonZeroU32, NonZeroU64},
+        sync::Arc,
+    };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -763,7 +769,10 @@ mod tests {
         },
         consensus::{VrfCommitProof, VrfParticipantRecord},
         metadata::Metadata,
-        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        nexus::{
+            LaneCatalog, LaneConfig, LaneId, LaneVisibility, PublicLaneValidatorRecord,
+            PublicLaneValidatorStatus,
+        },
         parameter::{Parameter, system::SumeragiNposParameters},
         prelude::{AccountId, PeerId},
         transaction::{
@@ -793,6 +802,27 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         )
+    }
+
+    fn enable_shared_public_staking_lanes(state: &mut State) {
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "penalty-sibling".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("shared public penalty lane catalog");
+        state
+            .set_nexus(nexus)
+            .expect("install shared public penalty lane catalog");
     }
 
     fn roster_keys() -> Vec<KeyPair> {
@@ -1250,10 +1280,10 @@ mod tests {
         key
     }
 
-    fn add_validator_record(state: &State, peer: &PeerId) -> AccountId {
+    fn add_validator_record_on_lane(state: &State, lane_id: LaneId, peer: &PeerId) -> AccountId {
         let validator = AccountId::new(peer.public_key().clone());
         let record = PublicLaneValidatorRecord {
-            lane_id: LaneId::SINGLE,
+            lane_id,
             validator: validator.clone(),
             peer_id: peer.clone(),
             stake_account: validator.clone(),
@@ -1266,9 +1296,13 @@ mod tests {
             last_reward_epoch: None,
         };
         let mut block = state.world.public_lane_validators.block();
-        block.insert((LaneId::SINGLE, validator.clone()), record);
+        block.insert((lane_id, validator.clone()), record);
         block.commit();
         validator
+    }
+
+    fn add_validator_record(state: &State, peer: &PeerId) -> AccountId {
+        add_validator_record_on_lane(state, LaneId::SINGLE, peer)
     }
 
     fn install_one_block_delay_npos(state: &State) {
@@ -1376,6 +1410,45 @@ mod tests {
             )),
             "unsigned network absence must not become attributable jail evidence"
         );
+    }
+
+    #[test]
+    fn vrf_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
+        let mut state = fresh_state();
+        enable_shared_public_staking_lanes(&mut state);
+        let frozen_roster = roster();
+        let context = install_npos_boundary_artifact(&state, &frozen_roster, 10);
+        let keys = roster_keys();
+        let offender = &frozen_roster[0];
+        let offender_account = add_validator_record_on_lane(&state, LaneId::new(1), offender);
+        let record = finalized_non_reveal_record(&context, &keys[0], 0);
+        let mut epochs = state.world.vrf_epochs.block();
+        epochs.insert(record.epoch, record);
+        epochs.commit();
+
+        let actions = PenaltyApplier::from_parts(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_vrf_penalty_actions(11)
+        .expect("verified boundary finality remains processable");
+
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                NposPenaltyAction::VrfJail(jail)
+                    if jail.peer_id == *offender || jail.validator == offender_account
+            )),
+            "a non-owner compatibility projection must not receive a VRF jail action"
+        );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            NposPenaltyAction::MarkVrfPenaltiesApplied(mark)
+                if mark.epoch == 0 && mark.height == 11
+        )));
     }
 
     #[test]
@@ -1678,6 +1751,49 @@ mod tests {
             NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
                 if mark.evidence_key == key && mark.height == 2
         )));
+    }
+
+    #[test]
+    fn consensus_penalty_ignores_singleton_non_owner_shared_dataspace_projection() {
+        let mut state = fresh_state();
+        enable_shared_public_staking_lanes(&mut state);
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        install_height_one_artifact(&state, &frozen_roster);
+        let offender = frozen_roster[1].clone();
+        let validator = add_validator_record_on_lane(&state, LaneId::new(1), &offender);
+        let evidence = double_prepare_evidence(1, 1, 37, 0);
+        let key = insert_evidence(&state, evidence, 1);
+
+        let actions = PenaltyApplier::from_parts(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_consensus_effects(2, std::iter::empty())
+        .expect("canonical evidence remains processable")
+        .penalty_actions;
+
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                NposPenaltyAction::ConsensusSlash(slash)
+                    if slash.evidence_key == key
+                        || slash.peer_id == offender
+                        || slash.validator == validator
+            )),
+            "a non-owner compatibility projection must not receive a consensus slash action"
+        );
+        assert!(
+            !actions.iter().any(|action| matches!(
+                action,
+                NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
+                    if mark.evidence_key == key
+            )),
+            "unresolved evidence must remain pending instead of being marked applied"
+        );
     }
 
     #[test]

@@ -259,6 +259,7 @@ validate_canonical_taira_topology() {
     "$EXPECTED_IS_ROUTE_ALIAS" \
     "$EXPECTED_IS2_ROUTE_ALIAS" \
     "$EXPECTED_CBSI_ROUTE_ALIAS" <<'PY'
+import json
 import pathlib
 import sys
 
@@ -474,6 +475,20 @@ if observed_rules != expected_rules:
         f"expected exact routing matcher tuples {expected_rules!r}, "
         f"observed {observed_rules!r}"
     )
+expected_runtime_rules = [
+    [lane_id, physical_dataspaces[dataspace], matcher_kind, matcher_value]
+    for lane_id, dataspace, matcher_kind, matcher_value in expected_rules
+]
+print(
+    json.dumps(
+        {
+            "default_lane": 0,
+            "default_dataspace": physical_dataspaces["universal"],
+            "rules": expected_runtime_rules,
+        },
+        separators=(",", ":"),
+    )
+)
 PY
 }
 
@@ -906,7 +921,10 @@ if [[ $SKIP_PUBLIC -eq 0 ]]; then
   REQUIRE_EXACT_GIT_SHA=1
 fi
 
-validate_canonical_taira_topology
+if ! EXPECTED_TAIRA_ROUTING_POLICY_JSON="$(validate_canonical_taira_topology)"; then
+  exit 1
+fi
+readonly EXPECTED_TAIRA_ROUTING_POLICY_JSON
 
 build_curl_resolve_args() {
   local url="$1"
@@ -1338,10 +1356,175 @@ for field in ("healthy", "min_samples_ok", "offset_ok", "confidence_ok"):
 PY
 }
 
+check_effective_routing_policy() {
+  local label="$1"
+  local status_path="$2"
+
+  python3 - "$label" "$status_path" "$EXPECTED_TAIRA_ROUTING_POLICY_JSON" <<'PY'
+import json
+import sys
+
+label, status_path, expected_routing_raw = sys.argv[1:]
+
+
+def fail(message):
+    raise SystemExit(f"{label}: Taira effective routing policy mismatch: {message}")
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+
+def require_uint(value, field):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        fail(f"{field} must be a non-negative integer, observed {value!r}")
+    return value
+
+
+try:
+    with open(status_path, "r", encoding="utf-8") as stream:
+        status = json.load(stream, object_pairs_hook=reject_duplicate_keys)
+except (OSError, ValueError, json.JSONDecodeError) as error:
+    fail(f"/status is invalid JSON: {error}")
+try:
+    expected = json.loads(
+        expected_routing_raw,
+        object_pairs_hook=reject_duplicate_keys,
+    )
+except (ValueError, json.JSONDecodeError) as error:
+    fail(f"canonical routing policy summary is invalid JSON: {error}")
+
+if not isinstance(status, dict):
+    fail("/status response is not an object")
+if not isinstance(expected, dict):
+    fail("canonical routing policy summary is not an object")
+
+policy_fields = {"default_lane", "default_dataspace", "rules"}
+if set(expected) != policy_fields:
+    fail(
+        "canonical routing policy summary must contain exactly "
+        f"{sorted(policy_fields)!r}"
+    )
+expected_default_lane = require_uint(
+    expected.get("default_lane"),
+    "canonical default_lane",
+)
+expected_default_dataspace = require_uint(
+    expected.get("default_dataspace"),
+    "canonical default_dataspace",
+)
+expected_rules_raw = expected.get("rules")
+if not isinstance(expected_rules_raw, list):
+    fail("canonical rules is not an array")
+expected_rules = []
+for position, rule in enumerate(expected_rules_raw):
+    if not isinstance(rule, list) or len(rule) != 4:
+        fail(f"canonical rules[{position}] is not a four-element routing tuple")
+    lane_id = require_uint(rule[0], f"canonical rules[{position}].lane")
+    dataspace_id = require_uint(
+        rule[1],
+        f"canonical rules[{position}].dataspace_id",
+    )
+    matcher_kind = rule[2]
+    matcher_value = rule[3]
+    if matcher_kind not in {"account", "instruction"}:
+        fail(f"canonical rules[{position}] has invalid matcher kind {matcher_kind!r}")
+    if not isinstance(matcher_value, str) or not matcher_value:
+        fail(f"canonical rules[{position}] has an empty matcher value")
+    expected_rules.append([lane_id, dataspace_id, matcher_kind, matcher_value])
+
+nexus = status.get("nexus")
+if not isinstance(nexus, dict):
+    fail("/status.nexus is not an object")
+policy = nexus.get("routing_policy")
+if not isinstance(policy, dict):
+    fail("/status.nexus.routing_policy is not an object")
+if set(policy) != policy_fields:
+    fail(
+        "/status.nexus.routing_policy must contain exactly "
+        f"{sorted(policy_fields)!r}, observed {sorted(policy)!r}"
+    )
+observed_default_lane = require_uint(
+    policy.get("default_lane"),
+    "/status.nexus.routing_policy.default_lane",
+)
+observed_default_dataspace = require_uint(
+    policy.get("default_dataspace"),
+    "/status.nexus.routing_policy.default_dataspace",
+)
+if observed_default_lane != expected_default_lane:
+    fail(f"default_lane must be {expected_default_lane}, observed {observed_default_lane}")
+if observed_default_dataspace != expected_default_dataspace:
+    fail(
+        "default_dataspace must be "
+        f"{expected_default_dataspace}, observed {observed_default_dataspace}"
+    )
+rules = policy.get("rules")
+if not isinstance(rules, list):
+    fail("/status.nexus.routing_policy.rules is not an array")
+observed_rules = []
+for position, rule in enumerate(rules):
+    if not isinstance(rule, dict):
+        fail(f"rules[{position}] is not an object")
+    rule_fields = {"lane", "dataspace_id", "matcher"}
+    if set(rule) != rule_fields:
+        fail(
+            f"rules[{position}] must contain exactly {sorted(rule_fields)!r}, "
+            f"observed {sorted(rule)!r}"
+        )
+    lane_id = require_uint(rule.get("lane"), f"rules[{position}].lane")
+    dataspace_id = require_uint(
+        rule.get("dataspace_id"),
+        f"rules[{position}].dataspace_id",
+    )
+    matcher = rule.get("matcher")
+    if not isinstance(matcher, dict):
+        fail(f"rules[{position}].matcher is not an object")
+    unknown_matcher_fields = set(matcher) - {
+        "account",
+        "instruction",
+        "description",
+    }
+    if unknown_matcher_fields:
+        fail(
+            f"rules[{position}].matcher has unsupported fields "
+            f"{sorted(unknown_matcher_fields)!r}"
+        )
+    selector_kinds = [
+        kind for kind in ("account", "instruction") if kind in matcher
+    ]
+    if len(selector_kinds) != 1:
+        fail(
+            f"rules[{position}].matcher must contain exactly one account or "
+            "instruction selector"
+        )
+    matcher_kind = selector_kinds[0]
+    matcher_value = matcher[matcher_kind]
+    if not isinstance(matcher_value, str) or not matcher_value:
+        fail(f"rules[{position}].matcher.{matcher_kind} is not a non-empty string")
+    if "description" in matcher:
+        description = matcher["description"]
+        if not isinstance(description, str) or not description:
+            fail(f"rules[{position}].matcher.description is empty")
+    observed_rules.append([lane_id, dataspace_id, matcher_kind, matcher_value])
+if observed_rules != expected_rules:
+    fail(
+        f"expected exact ordered rule tuples {expected_rules!r}, "
+        f"observed {observed_rules!r}"
+    )
+PY
+}
+
 check_status_snapshot() {
   local label="$1"
   local status_url="$2"
   local allow_pending_commit_qc="${3:-0}"
+  local snapshot_rc
 
   echo "==> ${label}: GET ${status_url}"
   http_request GET "$status_url"
@@ -1431,6 +1614,13 @@ if expected_dpn_commit:
         )
         sys.exit(1)
 PY
+  snapshot_rc=$?
+  if [[ $snapshot_rc -ne 0 ]]; then
+    return "$snapshot_rc"
+  fi
+  if ! check_effective_routing_policy "$label" "$last_body"; then
+    return 1
+  fi
 }
 
 check_sumeragi_snapshot() {
@@ -2015,14 +2205,12 @@ try:
     topology = json.loads(topology_raw, object_pairs_hook=reject_duplicate_keys)
 except (ValueError, json.JSONDecodeError) as error:
     fail(f"canonical topology summary is invalid JSON: {error}")
-
 if not isinstance(node_status, dict):
     fail("/status response is not an object")
 if not isinstance(sumeragi, dict):
     fail("/v1/sumeragi/status response is not an object")
 if not isinstance(topology, dict):
     fail("canonical topology summary is not an object")
-
 expected_lanes = topology.get("lanes")
 expected_dataspaces = topology.get("dataspaces")
 physical_dataspace_order = ("universal", "dpn", "is", "is2", "cbsi")
@@ -2320,6 +2508,11 @@ capture_validator_fleet_sample() {
     fi
     status_copy="$(mktemp)"
     cp "$last_body" "$status_copy"
+
+    if ! check_effective_routing_policy "validator ${label}" "$status_copy"; then
+      rm -f "$status_copy" "$records_file"
+      return 1
+    fi
 
     if ! check_sumeragi_snapshot \
       "validator ${label}" \

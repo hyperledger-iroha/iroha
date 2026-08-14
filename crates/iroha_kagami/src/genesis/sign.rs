@@ -826,7 +826,7 @@ fn staged_lane_manifest_registry(
     let registry =
         LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
     registry
-        .validate_active_coverage()
+        .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .map_err(|error| eyre!("invalid lane manifest registry for staged genesis: {error}"))?;
     Ok(registry)
 }

@@ -92,6 +92,10 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         preview.shape(),
         RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
     );
+    assert_eq!(
+        preview.settlement_family(),
+        Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalBroadcastAndSign)
+    );
     let broadcast = preview.broadcast_effect().clone();
     let next_sign = preview
         .next_sign_effect()
@@ -144,6 +148,29 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         ),
         request: SignRequest::Vote(commit),
     };
+    let proposal_broadcast = preview.broadcast.clone();
+    let proposal_next_sign = preview.next_sign.clone();
+    preview.broadcast = prepare_broadcast.clone();
+    preview.next_sign = Some(later_commit_sign.clone());
+    assert_eq!(
+        preview.settlement_family(),
+        Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::VoteBroadcastAndSign)
+    );
+    let Some(AdapterEffect::Sign {
+        request: SignRequest::Vote(malformed_commit),
+        ..
+    }) = preview.next_sign.as_mut()
+    else {
+        unreachable!("fixture successor remains a Vote Sign")
+    };
+    malformed_commit.subject = subject(0xD7);
+    assert_eq!(
+        preview.settlement_family(),
+        None,
+        "a mismatched combined relation has no settlement family"
+    );
+    preview.broadcast = proposal_broadcast;
+    preview.next_sign = proposal_next_sign;
     assert!(
         RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
             super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
@@ -329,6 +356,7 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         adapter: confirmed,
         effects: confirmed_effects,
         leader_wire_launch_prepared: false,
+        ..
     } = confirmed.state
     else {
         panic!("confirmed production startup remains in the recovered state")
@@ -434,7 +462,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     let [AdapterEffect::Sign { tag, request }] = effects.as_slice() else {
         panic!("recovered Proposal/Prepare FIFO must expose the Proposal Sign first")
     };
-    assert_eq!(request, &SignRequest::Proposal(proposal));
+    assert_eq!(request, &SignRequest::Proposal(proposal.clone()));
     let tag = *tag;
     let request = request.clone();
     let prepare_identity = cold_adapter
@@ -496,7 +524,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     else {
         unreachable!("cold fixture Broadcast is a signed Proposal")
     };
-    substituted_proposal.signature.push(0xD7);
+    substituted_proposal.subject.payload_hash = Hash::new(b"substituted cold Broadcast");
     assert!(
         RecoveredLifecycleSignedBroadcastColdPreviewAuthorityV1::from_recovered_wal(
             super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
@@ -518,10 +546,16 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     drop(cold_effects);
     let verified = VerifiedHeightContext::genesis(context.clone(), proofs.clone())
         .expect("reverify cold recovered Proposal context");
+    let recovered_local_proposal =
+        RecoveredLifecycleLocalProposalAttemptV1::for_test(tag, proposal.round, proposal.subject);
     let mut cold_preview =
-        ProductionLifecycleAdapterStartupV1::recovered(cold_adapter, Vec::new())
-            .prepare_recovered_lifecycle_signed_broadcast_and_sign(&verified, cold_authority)
-            .expect("cold adapter previews exact Broadcast and next Sign");
+        ProductionLifecycleAdapterStartupV1::recovered_with_local_proposal_attempt(
+            cold_adapter,
+            Vec::new(),
+            Some(recovered_local_proposal),
+        )
+        .prepare_recovered_lifecycle_signed_broadcast_and_sign(&verified, cold_authority)
+        .expect("cold adapter previews exact Broadcast and next Sign");
     let cold_body = body_store
         .authenticate_recovered_lifecycle_next_vote_body(&mut cold_preview)
         .expect("exact revalidated body store authenticates the cold next Vote");
@@ -569,12 +603,22 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     let ProductionLifecycleAdapterStartupStateV1::Recovered {
         adapter: advanced_cold_adapter,
         effects: advanced_cold_effects,
+        local_proposal_attempt: Some(recovered_local_proposal),
         leader_wire_launch_prepared: false,
+        ..
     } = cold_startup.state
     else {
         panic!("advanced cold preview retains one recovered adapter startup")
     };
     assert!(advanced_cold_effects.is_empty());
+    assert!(
+        recovered_local_proposal.exactly_matches_directive(
+            advanced_cold_adapter
+                .local_proposal_directive()
+                .expect("read the advanced cold Proposal directive"),
+        ),
+        "cold Broadcast-and-Sign replay must preserve its opaque local-attempt owner"
+    );
     let Some(reducer::SignableMessage::Vote(advanced_vote)) =
         advanced_cold_adapter.reducer.awaiting_signature()
     else {
@@ -620,6 +664,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             &mut services,
             context.clone(),
             local,
+            tag,
             Arc::clone(&output_guard),
             body_store,
             body_store_identity.clone(),
@@ -643,6 +688,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             &mut foreign_services,
             context,
             local,
+            tag,
             Arc::clone(&output_guard),
             foreign_store,
             foreign_store_identity,
@@ -670,6 +716,10 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     assert_eq!(
         preview.shape(),
         RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
+    );
+    assert_eq!(
+        preview.settlement_family(),
+        Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalPrepareWal)
     );
     assert!(body_authority.exactly_matches_for_test(&validated, &body_store_identity));
     let dispatch_key = preview.dispatch_key();
@@ -724,6 +774,10 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     assert_eq!(
         preview.shape(),
         RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign
+    );
+    assert_eq!(
+        preview.settlement_family(),
+        Some(RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalBroadcastAndSign)
     );
     assert_eq!(preview.adapter.wal.recovered_records().len(), 2);
     assert_eq!(preview.adapter.pending_persistence_id, Some(2));

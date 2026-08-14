@@ -44,6 +44,7 @@ public final class ToriiEventStreamClientTests {
     sseRequestPropagatesTimeout();
     sseRejectsCaseVariantAndRepeatedLastEventIdBeforeCanonicalDispatch();
     ssePreservesLastEventIdForReplayCapableCustomStreams();
+    sseInsertsOptionQueryBeforeUriFragment();
     terminalStreamErrorIsStrictlyTyped();
     listenerProjectionPropagatesUnwrappedTypedTerminalFailure();
     malformedTerminalStreamErrorsFailClosed();
@@ -361,6 +362,44 @@ public final class ToriiEventStreamClientTests {
         List.of("registry-42"),
         recorded[0].headers().get("Last-Event-ID"),
         "custom stream resume header must be preserved");
+  }
+
+  private static void sseInsertsOptionQueryBeforeUriFragment() throws Exception {
+    final TransportRequest[] recorded = new TransportRequest[1];
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com"))
+            .setTransportExecutor(
+                request -> {
+                  recorded[0] = request;
+                  return okSseResponse();
+                })
+            .build();
+    final ToriiEventStreamOptions options =
+        ToriiEventStreamOptions.builder().putQueryParameter("kind", "blocks").build();
+    final String[][] cases =
+        new String[][] {
+          {"/v1/events/sse#client-state", "kind=blocks"},
+          {"/v1/events/sse?existing=1#client-state", "existing=1&kind=blocks"}
+        };
+
+    for (final String[] testCase : cases) {
+      recorded[0] = null;
+      client
+          .openSseStream(testCase[0], options, event -> {})
+          .completion()
+          .get(1, TimeUnit.SECONDS);
+
+      if (recorded[0] == null) {
+        throw new AssertionError("expected fragment-bearing request to be dispatched");
+      }
+      assertEquals(
+          testCase[1], recorded[0].uri().getRawQuery(), "query must precede URI fragment");
+      assertEquals(
+          "client-state",
+          recorded[0].uri().getRawFragment(),
+          "URI fragment must be preserved");
+    }
   }
 
   private static void terminalStreamErrorIsStrictlyTyped() {

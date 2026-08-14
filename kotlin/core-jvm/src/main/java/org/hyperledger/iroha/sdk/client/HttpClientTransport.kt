@@ -1600,7 +1600,17 @@ class HttpClientTransport(
         }
         private fun emitRedactionFailure(sink: TelemetrySink, signalId: String, reason: String) { sink.emitSignal(REDACTION_FAILURE_SIGNAL, mapOf("signal_id" to signalId, "reason" to reason)) }
         private fun buildPipelineStatusHttpException(hashHex: String, response: ClientResponse): TransactionStatusHttpException = TransactionStatusHttpException(hashHex, response.statusCode, response.rejectCode(), HttpErrorMessageExtractor.extractMessage(response.body))
-        private fun appendQuery(target: URI, params: Map<String, String>): URI { if (params.isEmpty()) return target; val sb = StringBuilder(target.toString()).append(if (target.toString().contains("?")) "&" else "?").append(encodeQuery(params)); return URI.create(sb.toString()) }
+        private fun appendQuery(target: URI, params: Map<String, String>): URI {
+            if (params.isEmpty()) return target
+            val targetText = target.toString()
+            val fragmentIndex = targetText.indexOf('#').let { if (it >= 0) it else targetText.length }
+            val builder = StringBuilder(targetText.length + 1)
+                .append(targetText, 0, fragmentIndex)
+            builder.append(if (builder.indexOf("?") >= 0) "&" else "?")
+            builder.append(encodeQuery(params))
+            builder.append(targetText, fragmentIndex, targetText.length)
+            return URI.create(builder.toString())
+        }
         private fun encodeQuery(params: Map<String, String>): String = params.entries.joinToString("&") { (k, v) -> "${urlEncode(k)}=${urlEncode(v)}" }
         private fun encodePathSegment(segment: String): String = urlEncode(segment).replace("+", "%20")
         private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())

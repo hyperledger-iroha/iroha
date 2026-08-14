@@ -31,9 +31,22 @@ def _sumeragi_snapshot_checker_source() -> str:
 
 
 def _status_snapshot_checker_source() -> str:
+    source = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"check_status_snapshot\(\) \{.*?"
+        r"python3 - \"\$label\" \"\$last_body\" .*? <<'PY'\n"
+        r"(?P<body>.*?)\nPY\n  snapshot_rc=\$\?",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("body")
+
+
+def _effective_routing_policy_checker_source() -> str:
     return _embedded_checker_source(
-        "check_status_snapshot",
-        'python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" "$EXPECTED_TAIRA_GIT_SHA" "$REQUIRE_EXACT_GIT_SHA" "$EXPECTED_DPN_VALIDATOR_RELEASE_COMMIT" <<\'PY\'',
+        "check_effective_routing_policy",
+        '  python3 - "$label" "$status_path" "$EXPECTED_TAIRA_ROUTING_POLICY_JSON" <<\'PY\'',
     )
 
 
@@ -279,6 +292,25 @@ def _run_physical_dataspace_roster_checker(
     )
 
 
+def _run_effective_routing_policy_checker(
+    tmp_path: Path,
+    status_payload: dict[str, object],
+) -> subprocess.CompletedProcess[str]:
+    status_path = tmp_path / "routing-status.json"
+    status_path.write_text(json.dumps(status_payload), encoding="utf-8")
+    expected_routing = json.dumps(
+        _expected_routing_policy_summary(),
+        separators=(",", ":"),
+    )
+    return subprocess.run(
+        ["python3", "-", "status", str(status_path), expected_routing],
+        input=_effective_routing_policy_checker_source(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _healthy_lane_dataspace_topology() -> dict[str, object]:
     return {
         "version": 1,
@@ -302,6 +334,60 @@ def _healthy_lane_dataspace_topology() -> dict[str, object]:
             {"id": 6, "alias": "cbsi", "dataspace_id": 20},
         ],
         "catalog_hash": "hash:" + "c" * 64,
+    }
+
+
+def _canonical_routing_rule_tuples() -> list[list[object]]:
+    return [
+        [3, 10, "account", "*@dpn"],
+        [4, 6647857470246403404, "account", "*@wonderland.is"],
+        [5, 8477022798449861195, "account", "*@boi.is2"],
+        [5, 8477022798449861195, "account", "*@leumi.is2"],
+        [5, 8477022798449861195, "account", "*@hapoalim.is2"],
+        [5, 8477022798449861195, "account", "*@discount.is2"],
+        [5, 8477022798449861195, "account", "*@mizrahi.is2"],
+        [5, 8477022798449861195, "account", "*@fibi.is2"],
+        [5, 8477022798449861195, "account", "*@onezero.is2"],
+        [5, 8477022798449861195, "account", "*@jerusalem.is2"],
+        [6, 20, "account", "*@cbsi"],
+        [6, 20, "account", "*@pob.cbsi"],
+        [6, 20, "account", "*@bred.cbsi"],
+        [6, 20, "account", "*@anz.cbsi"],
+        [6, 20, "account", "*@bsp.cbsi"],
+        [6, 20, "account", "*@m-selen.cbsi"],
+        [6, 20, "account", "*@ezipei.cbsi"],
+        [1, 0, "instruction", "governance"],
+        [2, 0, "instruction", "smartcontract::deploy"],
+    ]
+
+
+def _expected_routing_policy_summary() -> dict[str, object]:
+    return {
+        "default_lane": 0,
+        "default_dataspace": 0,
+        "rules": _canonical_routing_rule_tuples(),
+    }
+
+
+def _healthy_routing_policy() -> dict[str, object]:
+    rules = []
+    for position, (lane_id, dataspace_id, matcher_kind, matcher_value) in enumerate(
+        _canonical_routing_rule_tuples()
+    ):
+        rules.append(
+            {
+                "lane": lane_id,
+                "dataspace_id": dataspace_id,
+                "matcher": {
+                    matcher_kind: matcher_value,
+                    "description": f"canonical Taira routing rule {position}",
+                },
+            }
+        )
+    return {
+        "default_lane": 0,
+        "default_dataspace": 0,
+        "rules": rules,
     }
 
 
@@ -354,6 +440,7 @@ def _healthy_physical_dataspace_status() -> dict[str, object]:
             }
         )
     return {
+        "nexus": {"routing_policy": _healthy_routing_policy()},
         "teu_lane_commit": teu_lane_commit,
         "dataspace_catalog": dataspace_catalog,
     }
@@ -509,6 +596,7 @@ def test_canonical_config_topology_accepts_exact_routing_matcher_inventory() -> 
     result = _run_canonical_config_topology_checker(config)
 
     assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == _expected_routing_policy_summary()
 
 
 def test_canonical_config_topology_rejects_missing_extra_or_wrong_matcher(
@@ -660,6 +748,92 @@ def test_physical_dataspace_rosters_accept_distinct_manifest_cohorts(
     for lane in lanes[3:]:
         assert isinstance(lane, dict)
         assert lane["manifest_required"] is False
+
+
+def test_effective_routing_policy_accepts_canonical_live_status(tmp_path: Path) -> None:
+    result = _run_effective_routing_policy_checker(
+        tmp_path,
+        _healthy_physical_dataspace_status(),
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_effective_routing_policy_rejects_missing_or_drifted_live_status(
+    tmp_path: Path,
+) -> None:
+    def routing_policy(status: dict[str, object]) -> dict[str, object]:
+        nexus = status["nexus"]
+        assert isinstance(nexus, dict)
+        policy = nexus["routing_policy"]
+        assert isinstance(policy, dict)
+        return policy
+
+    def routing_rules(status: dict[str, object]) -> list[object]:
+        rules = routing_policy(status)["rules"]
+        assert isinstance(rules, list)
+        return rules
+
+    missing_nexus = _healthy_physical_dataspace_status()
+    missing_nexus.pop("nexus")
+
+    missing_policy = _healthy_physical_dataspace_status()
+    nexus = missing_policy["nexus"]
+    assert isinstance(nexus, dict)
+    nexus.pop("routing_policy")
+
+    wrong_default = _healthy_physical_dataspace_status()
+    routing_policy(wrong_default)["default_dataspace"] = 10
+
+    wrong_dataspace = _healthy_physical_dataspace_status()
+    first_rule = routing_rules(wrong_dataspace)[0]
+    assert isinstance(first_rule, dict)
+    first_rule["dataspace_id"] = 11
+
+    wrong_matcher = _healthy_physical_dataspace_status()
+    external_poc_rule = routing_rules(wrong_matcher)[1]
+    assert isinstance(external_poc_rule, dict)
+    matcher = external_poc_rule["matcher"]
+    assert isinstance(matcher, dict)
+    matcher["account"] = "*@is"
+
+    reordered = _healthy_physical_dataspace_status()
+    rules = routing_rules(reordered)
+    rules[0], rules[1] = rules[1], rules[0]
+
+    ambiguous_matcher = _healthy_physical_dataspace_status()
+    first_rule = routing_rules(ambiguous_matcher)[0]
+    assert isinstance(first_rule, dict)
+    matcher = first_rule["matcher"]
+    assert isinstance(matcher, dict)
+    matcher["instruction"] = "governance"
+
+    null_description = _healthy_physical_dataspace_status()
+    first_rule = routing_rules(null_description)[0]
+    assert isinstance(first_rule, dict)
+    matcher = first_rule["matcher"]
+    assert isinstance(matcher, dict)
+    matcher["description"] = None
+
+    cases = (
+        (missing_nexus, "/status.nexus is not an object"),
+        (missing_policy, "/status.nexus.routing_policy is not an object"),
+        (wrong_default, "default_dataspace must be 0, observed 10"),
+        (wrong_dataspace, "expected exact ordered rule tuples"),
+        (wrong_matcher, "expected exact ordered rule tuples"),
+        (reordered, "expected exact ordered rule tuples"),
+        (ambiguous_matcher, "must contain exactly one account or instruction selector"),
+        (null_description, "matcher.description is empty"),
+    )
+    for status, expected_error in cases:
+        result = _run_effective_routing_policy_checker(
+            tmp_path,
+            status,
+        )
+
+        assert result.returncode == 1
+        assert "Taira effective routing policy mismatch" in result.stderr
+        assert expected_error in result.stderr
 
 
 def test_physical_dataspace_rosters_require_ready_private_manifest_evidence(

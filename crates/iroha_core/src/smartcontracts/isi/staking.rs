@@ -126,6 +126,28 @@ fn ensure_lane_allows_staking(
     Ok(())
 }
 
+fn ensure_canonical_staking_owner(
+    state_transaction: &StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    context: &str,
+) -> Result<(), Error> {
+    let Some(owner_lane) = state_transaction.staking_authority_lane(lane_id) else {
+        return Err(Error::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "{context} rejected: lane {lane_id} has no active staking owner"
+            )),
+        ));
+    };
+    if owner_lane != lane_id {
+        return Err(Error::InvalidParameter(
+            InvalidParameterError::SmartContract(format!(
+                "{context} rejected: lane {lane_id} shares a physical dataspace whose staking owner is lane {owner_lane}"
+            )),
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_validator_authority(
     authority: &AccountId,
     validator: &AccountId,
@@ -191,6 +213,11 @@ impl Execute for RegisterPublicLaneValidator {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
+            state_transaction,
+            self.lane_id,
+            "register_public_lane_validator",
+        )?;
+        ensure_canonical_staking_owner(
             state_transaction,
             self.lane_id,
             "register_public_lane_validator",
@@ -393,6 +420,11 @@ impl Execute for ActivatePublicLaneValidator {
             self.lane_id,
             "activate_public_lane_validator",
         )?;
+        ensure_canonical_staking_owner(
+            state_transaction,
+            self.lane_id,
+            "activate_public_lane_validator",
+        )?;
         finalize_validator_lifecycle(state_transaction)?;
         let validator_key = validator_storage_key(self.lane_id, &self.validator);
         let validator_record = state_transaction
@@ -485,6 +517,11 @@ impl Execute for RebindPublicLaneValidatorPeer {
             self.lane_id,
             "rebind_public_lane_validator_peer",
         )?;
+        ensure_canonical_staking_owner(
+            state_transaction,
+            self.lane_id,
+            "rebind_public_lane_validator_peer",
+        )?;
         ensure_validator_authority(
             authority,
             &self.validator,
@@ -570,6 +607,11 @@ impl Execute for ExitPublicLaneValidator {
             self.lane_id,
             "exit_public_lane_validator",
         )?;
+        ensure_canonical_staking_owner(
+            state_transaction,
+            self.lane_id,
+            "exit_public_lane_validator",
+        )?;
         ensure_validator_authority(authority, &self.validator, "exit_public_lane_validator")?;
         let now_ms = state_transaction.block_unix_timestamp_ms();
         if self.release_at_ms < now_ms {
@@ -640,6 +682,7 @@ impl Execute for BondPublicLaneStake {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(state_transaction, self.lane_id, "bond_public_lane_stake")?;
+        ensure_canonical_staking_owner(state_transaction, self.lane_id, "bond_public_lane_stake")?;
         ensure_staker_authority(authority, &self.staker, "bond_public_lane_stake")?;
         finalize_validator_lifecycle(state_transaction)?;
         ensure_positive_amount(&self.amount, "stake amount")?;
@@ -740,6 +783,11 @@ impl Execute for SchedulePublicLaneUnbond {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_lane_allows_staking(
+            state_transaction,
+            self.lane_id,
+            "schedule_public_lane_unbond",
+        )?;
+        ensure_canonical_staking_owner(
             state_transaction,
             self.lane_id,
             "schedule_public_lane_unbond",
@@ -855,6 +903,11 @@ impl Execute for FinalizePublicLaneUnbond {
             self.lane_id,
             "finalize_public_lane_unbond",
         )?;
+        ensure_canonical_staking_owner(
+            state_transaction,
+            self.lane_id,
+            "finalize_public_lane_unbond",
+        )?;
         ensure_staker_authority(authority, &self.staker, "finalize_public_lane_unbond")?;
         finalize_validator_lifecycle(state_transaction)?;
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
@@ -938,6 +991,11 @@ impl Execute for SlashPublicLaneValidator {
             self.lane_id,
             "slash_public_lane_validator",
         )?;
+        ensure_canonical_staking_owner(
+            state_transaction,
+            self.lane_id,
+            "slash_public_lane_validator",
+        )?;
         finalize_validator_lifecycle(state_transaction)?;
         ensure_positive_amount(&self.amount, "slash amount")?;
         let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
@@ -1005,9 +1063,20 @@ impl Execute for RecordPublicLaneRewards {
             self.lane_id,
             "record_public_lane_rewards",
         )?;
+        let validator_lane_id = state_transaction
+            .staking_authority_lane(self.lane_id)
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    format!(
+                        "record_public_lane_rewards rejected: lane {} has no active staking owner",
+                        self.lane_id
+                    )
+                    .into(),
+                )
+            })?;
         ensure_positive_amount(&self.total_reward, "total_reward")?;
         finalize_validator_lifecycle(state_transaction)?;
-        ensure_reward_targets_active(state_transaction, self.lane_id, &self.shares)?;
+        ensure_reward_targets_active(state_transaction, validator_lane_id, &self.shares)?;
 
         let record_key = (self.lane_id, self.epoch);
         ensure_reward_epoch_fresh(state_transaction, self.lane_id, self.epoch, record_key)?;
@@ -1033,7 +1102,12 @@ impl Execute for RecordPublicLaneRewards {
             .world
             .public_lane_rewards
             .insert(record_key, record);
-        update_validator_rewards(state_transaction, self.lane_id, self.epoch, &self.shares);
+        update_validator_rewards(
+            state_transaction,
+            validator_lane_id,
+            self.epoch,
+            &self.shares,
+        );
 
         #[cfg(feature = "telemetry")]
         state_transaction
@@ -1250,9 +1324,10 @@ fn finalize_pending_activations(
         .iter()
         .filter(|(key, record)| {
             public_lane_validator_record_matches_key(key, record)
+                && state_transaction.staking_authority_lane(key.0) == Some(key.0)
                 && matches!(
-                record.status,
-                PublicLaneValidatorStatus::PendingActivation(pending) if pending <= current_epoch
+                    record.status,
+                    PublicLaneValidatorStatus::PendingActivation(pending) if pending <= current_epoch
             )
         })
         .map(|(key, record)| (key.clone(), record.status.clone()))
@@ -1485,7 +1560,11 @@ fn update_validator_rewards(
         if let Some(validator) = state_transaction.world.public_lane_validators.get_mut(&key)
             && public_lane_validator_record_matches_key(&key, validator)
         {
-            validator.last_reward_epoch = Some(epoch);
+            validator.last_reward_epoch = Some(
+                validator
+                    .last_reward_epoch
+                    .map_or(epoch, |last_epoch| last_epoch.max(epoch)),
+            );
         }
     }
 }
@@ -1675,6 +1754,7 @@ pub(crate) fn apply_slash_to_validator(
     amount: &Quantity,
     now_ms: u64,
 ) -> Result<(), Error> {
+    ensure_canonical_staking_owner(state_transaction, lane_id, "apply_slash_to_validator")?;
     let dataspace_catalog = state_transaction.nexus.dataspace_catalog.clone();
     let staking_cfg = state_transaction.nexus.staking.clone();
     let world = &state_transaction.world;
@@ -2062,7 +2142,6 @@ mod tests {
     use super::*;
     use crate::{
         block::ValidBlock,
-        kura::Kura,
         query::store::LiveQueryStore,
         state::{State, StateBlock, StateTransaction, World},
     };
@@ -3364,6 +3443,71 @@ mod tests {
     }
 
     #[test]
+    fn finalize_pending_activations_skips_non_owner_same_dataspace_rows() {
+        let mut state = setup_state();
+        set_epoch_length(&mut state, 3);
+
+        let mut state_block = state.block(block_header_with_height(7));
+        let mut stx = state_block.transaction();
+        let (owner_validator, sibling_validator, _, _) = prepare_accounts(&mut stx);
+        let owner_lane = LaneId::SINGLE;
+        let sibling_lane = LaneId::new(1);
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: sibling_lane,
+                        alias: "pending-shared-staking-sibling".to_owned(),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("shared-dataspace lane catalog"),
+        );
+        insert_validator_record_for_key(
+            &mut stx,
+            owner_lane,
+            owner_lane,
+            &owner_validator,
+            PublicLaneValidatorStatus::PendingActivation(2),
+            Quantity::from(1_000_u64),
+        );
+        insert_validator_record_for_key(
+            &mut stx,
+            sibling_lane,
+            sibling_lane,
+            &sibling_validator,
+            PublicLaneValidatorStatus::PendingActivation(2),
+            Quantity::from(1_000_u64),
+        );
+
+        finalize_pending_activations(&mut stx).expect("activation pass should complete");
+
+        let owner = stx
+            .world
+            .public_lane_validators()
+            .get(&(owner_lane, owner_validator))
+            .expect("canonical owner validator remains present");
+        assert!(matches!(owner.status, PublicLaneValidatorStatus::Active));
+        let sibling = stx
+            .world
+            .public_lane_validators()
+            .get(&(sibling_lane, sibling_validator))
+            .expect("non-owner sibling validator remains present");
+        assert!(matches!(
+            sibling.status,
+            PublicLaneValidatorStatus::PendingActivation(2)
+        ));
+        assert_eq!(sibling.activation_epoch, None);
+        assert_eq!(sibling.activation_height, None);
+    }
+
+    #[test]
     fn activate_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
         let state = setup_state();
         let mut state_block = state.block(block_header_with_height(1));
@@ -3693,6 +3837,92 @@ mod tests {
         assert!(
             stx.world.public_lane_rewards.get(&(lane_id, 1)).is_none(),
             "rejected reward record must not be persisted"
+        );
+    }
+
+    #[test]
+    fn out_of_order_sibling_lane_rewards_preserve_canonical_owner_reward_epoch() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let owner_lane = LaneId::SINGLE;
+        let serviced_lane = LaneId::new(1);
+        let (_sink, validator, reward_asset, _) =
+            configure_reward_fixture(&mut stx, owner_lane, 500);
+        stx.world
+            .public_lane_validators
+            .get_mut(&(owner_lane, validator.clone()))
+            .expect("canonical owner validator")
+            .status = PublicLaneValidatorStatus::Active;
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: serviced_lane,
+                        alias: "reward-serviced-sibling".to_owned(),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("shared-dataspace reward lane catalog"),
+        );
+
+        let validator_share = PublicLaneRewardShare {
+            account: validator.clone(),
+            role: PublicLaneRewardRole::Validator,
+            amount: Quantity::from(25_u64),
+        };
+        RecordPublicLaneRewards {
+            lane_id: owner_lane,
+            epoch: 10,
+            reward_asset: reward_asset.clone(),
+            total_reward: Quantity::from(25_u64),
+            shares: vec![validator_share.clone()],
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("the canonical lane may first record its later epoch");
+
+        RecordPublicLaneRewards {
+            lane_id: serviced_lane,
+            epoch: 5,
+            reward_asset,
+            total_reward: Quantity::from(25_u64),
+            shares: vec![validator_share],
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("a serviced sibling may record rewards for the shared validator cohort");
+
+        assert!(
+            stx.world
+                .public_lane_rewards
+                .get(&(serviced_lane, 5))
+                .is_some(),
+            "the reward ledger remains keyed to the serviced lane"
+        );
+        assert_eq!(
+            stx.world
+                .public_lane_validators
+                .get(&(owner_lane, validator.clone()))
+                .expect("canonical owner validator after reward")
+                .last_reward_epoch,
+            Some(10),
+            "an older sibling-lane epoch must not regress the shared validator marker"
+        );
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(serviced_lane, validator))
+                .is_none(),
+            "reward recording must not create a sibling stake projection"
         );
     }
 
@@ -4813,6 +5043,95 @@ mod tests {
         .execute(&validator, &mut stx);
 
         assert!(res.is_err(), "expected register to fail when peer missing");
+    }
+
+    #[test]
+    fn register_rejects_non_owner_same_dataspace_lane_before_stake_moves() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, escrow, asset_definition) = prepare_accounts(&mut stx);
+        let owner_lane = LaneId::SINGLE;
+        let sibling_lane = LaneId::new(1);
+        set_transaction_lane_catalog(
+            &mut stx,
+            LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: sibling_lane,
+                        alias: "shared-staking-sibling".to_owned(),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("two public lanes may share the universal dataspace"),
+        );
+        assert_eq!(stx.staking_authority_lane(sibling_lane), Some(owner_lane));
+
+        let validator_asset = AssetId::new(asset_definition.clone(), validator.clone());
+        let escrow_asset = AssetId::new(asset_definition, escrow);
+        let validator_balance_before = stx
+            .world
+            .assets
+            .get(&validator_asset)
+            .expect("validator stake balance")
+            .as_ref()
+            .clone();
+        let escrow_balance_before = stx
+            .world
+            .assets
+            .get(&escrow_asset)
+            .map(|asset| asset.as_ref().clone());
+
+        let err = RegisterPublicLaneValidator {
+            lane_id: sibling_lane,
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect_err("a non-owner sibling must not create a second stake projection");
+
+        assert!(matches!(
+            err,
+            Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                if message.contains("staking owner is lane")
+        ));
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&validator_asset)
+                .expect("validator stake balance after rejection")
+                .as_ref(),
+            &validator_balance_before
+        );
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&escrow_asset)
+                .map(|asset| asset.as_ref().clone()),
+            escrow_balance_before
+        );
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(sibling_lane, validator.clone()))
+                .is_none()
+        );
+        assert!(
+            stx.world
+                .public_lane_stake_shares
+                .get(&(sibling_lane, validator.clone(), validator))
+                .is_none()
+        );
     }
 
     #[test]

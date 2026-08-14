@@ -71,7 +71,20 @@ where
     crate::core::enforce_decode_sequence_length(
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
     )?;
-    let mut out = Vec::with_capacity(len);
+    let minimum_headers = len
+        .checked_mul(std::mem::size_of::<u64>())
+        .ok_or(Error::LengthMismatch)?;
+    if minimum_headers > bytes.len().saturating_sub(cursor) {
+        return Err(Error::LengthMismatch);
+    }
+    let allocation_bytes = len
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(Error::LengthMismatch)?;
+    crate::core::reserve_decode_allocation(allocation_bytes)?;
+    let mut out = Vec::new();
+    out.try_reserve(len).map_err(|_| Error::AllocationFailed {
+        bytes: u64::try_from(allocation_bytes).unwrap_or(u64::MAX),
+    })?;
     for _ in 0..len {
         let elem_len = read_len_u64(bytes, &mut cursor)?;
         let end = cursor.checked_add(elem_len).ok_or(Error::LengthMismatch)?;

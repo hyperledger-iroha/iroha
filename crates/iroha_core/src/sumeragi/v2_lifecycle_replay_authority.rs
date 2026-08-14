@@ -4704,6 +4704,7 @@ mod tests {
 pub(super) use tests::{
     ReplayCase, durable_certified_fetch_projection_fixture, exact_body_record_fixture,
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
-    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
-    exact_replay_authority_for_payload_fixture, foreign_certified_serve_family_authority_fixture,
+    exact_pending_certified_fetch_candidate_fixture, exact_record_fixture,
+    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
+    foreign_certified_serve_family_authority_fixture,
 };

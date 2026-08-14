@@ -395,7 +395,7 @@ use crate::{
     compliance::LaneComplianceEngine,
     executor::Executor,
     governance::manifest::{
-        LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
+        GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::{Kura, PendingCertifiedMergeEvidenceScan},
@@ -12618,6 +12618,18 @@ impl<'state> StateBlock<'state> {
             .collect();
 
         for (key, previous_status) in pending {
+            if nexus_staking_authority_lane_at_height(key.0, &self.nexus, block_height)
+                != Some(key.0)
+            {
+                iroha_logger::error!(
+                    lane_id = %key.0,
+                    validator = %key.1,
+                    current_epoch,
+                    block_height,
+                    "pending validator belongs to a non-owner staking lane; skipping activation"
+                );
+                continue;
+            }
             let Some(mut record) = self.world.public_lane_validators.get(&key).cloned() else {
                 continue;
             };
@@ -12654,6 +12666,7 @@ impl<'state> StateBlock<'state> {
     }
 
     fn clear_expired_vrf_public_lane_jails(&mut self, current_epoch: u64) {
+        let block_height = self._curr_block.height().get();
         let to_restore: Vec<_> = self
             .world
             .public_lane_validators
@@ -12671,6 +12684,18 @@ impl<'state> StateBlock<'state> {
             .collect();
 
         for (key, previous_status) in to_restore {
+            if nexus_staking_authority_lane_at_height(key.0, &self.nexus, block_height)
+                != Some(key.0)
+            {
+                iroha_logger::error!(
+                    lane_id = %key.0,
+                    validator = %key.1,
+                    current_epoch,
+                    block_height,
+                    "jailed validator belongs to a non-owner staking lane; skipping restoration"
+                );
+                continue;
+            }
             let Some(mut record) = self.world.public_lane_validators.get(&key).cloned() else {
                 continue;
             };
@@ -13241,6 +13266,12 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         self.nexus
             .staking
             .validator_mode(lane_id, &self.nexus.lane_catalog)
+    }
+
+    /// Resolve the only lane allowed to own staking storage for this lane's dataspace.
+    #[inline]
+    pub(crate) fn staking_authority_lane(&self, lane_id: LaneId) -> Option<LaneId> {
+        nexus_staking_authority_lane_at_height(lane_id, &self.nexus, self.block_height())
     }
 
     /// Access the settlement engine for this transaction scope.
@@ -13913,6 +13944,50 @@ pub(crate) fn nexus_active_lane_dataspace_at_height(
         .then_some(dataspace_id)
 }
 
+/// Resolve the canonical lane that owns mutable staking state for a physical dataspace.
+///
+/// Static lanes in one dataspace share one validator cohort, so only the
+/// lowest active stake-elected lane may own its lane-keyed compatibility rows.
+/// Nexus-disabled and autoscale-managed lanes retain their exact-lane behavior.
+pub(crate) fn nexus_staking_authority_lane_at_height(
+    lane_id: LaneId,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> Option<LaneId> {
+    if !nexus.enabled {
+        return Some(lane_id);
+    }
+    let dataspace_id = nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)?;
+    let lane = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)?;
+    if lane_uses_reserved_autoscale_metadata(lane) {
+        return Some(lane_id);
+    }
+
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|candidate| !lane_uses_reserved_autoscale_metadata(candidate))
+        .filter(|candidate| {
+            nexus_active_lane_dataspace_at_height(candidate.id, nexus, block_height)
+                == Some(dataspace_id)
+        })
+        .filter(|candidate| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(candidate.id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .map(|candidate| candidate.id)
+        .min()
+}
+
 /// Resolve the lane route used by consensus at an explicit proposal height.
 ///
 /// Nexus mode applies the height-sensitive catalog and autoscale policy. In
@@ -13932,6 +14007,46 @@ pub(crate) fn consensus_lane_dataspace_at_height(
         nexus_catalog_geometry_lane_dataspace(lane_id, nexus)
             .filter(|dataspace_id| *dataspace_id == DataSpaceId::UNIVERSAL)
     }
+}
+
+/// Resolve the manifest-authority source lanes for one active routed target.
+///
+/// Static lanes share authority only with active static siblings in the same
+/// physical dataspace. Autoscale-managed lanes retain exact-lane authority so
+/// their mutable manifests cannot influence static authority or another
+/// elastic lane's pinned incarnation committee.
+pub(crate) fn nexus_manifest_authority_eligible_lanes_at_height(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> BTreeSet<LaneId> {
+    if consensus_lane_dataspace_at_height(lane_id, nexus, block_height) != Some(dataspace_id) {
+        return BTreeSet::new();
+    }
+    let Some(target_lane) = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+    else {
+        return BTreeSet::new();
+    };
+    if lane_uses_reserved_autoscale_metadata(target_lane) {
+        return BTreeSet::from([lane_id]);
+    }
+
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|candidate| !lane_uses_reserved_autoscale_metadata(candidate))
+        .filter(|candidate| {
+            consensus_lane_dataspace_at_height(candidate.id, nexus, block_height)
+                == Some(dataspace_id)
+        })
+        .map(|candidate| candidate.id)
+        .collect()
 }
 
 fn axt_lane_map_from_lane_config(lane_config: &LaneConfig) -> BTreeMap<DataSpaceId, LaneId> {
@@ -15139,6 +15254,131 @@ mod stake_snapshot_tests {
         );
         assert_eq!(mismatched.activation_epoch, None);
         assert_eq!(mismatched.activation_height, None);
+    }
+
+    #[test]
+    fn state_block_does_not_activate_restored_non_owner_staking_rows() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state =
+            State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+        let owner_lane = LaneId::SINGLE;
+        let sibling_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: sibling_lane,
+                    alias: "restored-staking-sibling".to_owned(),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("shared-dataspace lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
+        state
+            .set_nexus(nexus)
+            .expect("apply shared-dataspace Nexus config");
+
+        let owner_kp = crate::state::checked_keypair();
+        let pending_sibling_kp = crate::state::checked_keypair();
+        let jailed_sibling_kp = crate::state::checked_keypair();
+        let owner_validator = DMAccountId::of(owner_kp.public_key().clone());
+        let pending_sibling_validator = DMAccountId::of(pending_sibling_kp.public_key().clone());
+        let jailed_sibling_validator = DMAccountId::of(jailed_sibling_kp.public_key().clone());
+        let record =
+            |lane_id, validator: DMAccountId, peer_key, status: PublicLaneValidatorStatus| {
+                PublicLaneValidatorRecord {
+                    lane_id,
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(peer_key),
+                    stake_account: validator,
+                    total_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                    self_stake: iroha_primitives::numeric::Quantity::from(10_u32),
+                    metadata: Metadata::default(),
+                    status,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                }
+            };
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (owner_lane, owner_validator.clone()),
+                record(
+                    owner_lane,
+                    owner_validator.clone(),
+                    owner_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::PendingActivation(3),
+                ),
+            );
+            block.insert(
+                (sibling_lane, pending_sibling_validator.clone()),
+                record(
+                    sibling_lane,
+                    pending_sibling_validator.clone(),
+                    pending_sibling_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::PendingActivation(3),
+                ),
+            );
+            block.insert(
+                (sibling_lane, jailed_sibling_validator.clone()),
+                record(
+                    sibling_lane,
+                    jailed_sibling_validator.clone(),
+                    jailed_sibling_kp.public_key().clone(),
+                    PublicLaneValidatorStatus::Jailed("vrf_penalty_epoch_2".to_owned()),
+                ),
+            );
+            block.commit();
+        }
+
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(9).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut state_block = state.block(header);
+        state_block.activate_due_public_lane_validators(3);
+        state_block.clear_expired_vrf_public_lane_jails(3);
+
+        let owner = state_block
+            .world
+            .public_lane_validators
+            .get(&(owner_lane, owner_validator))
+            .expect("canonical owner validator remains present");
+        assert!(matches!(owner.status, PublicLaneValidatorStatus::Active));
+        let pending_sibling = state_block
+            .world
+            .public_lane_validators
+            .get(&(sibling_lane, pending_sibling_validator))
+            .expect("pending non-owner validator remains present");
+        assert!(matches!(
+            pending_sibling.status,
+            PublicLaneValidatorStatus::PendingActivation(3)
+        ));
+        let jailed_sibling = state_block
+            .world
+            .public_lane_validators
+            .get(&(sibling_lane, jailed_sibling_validator))
+            .expect("jailed non-owner validator remains present");
+        assert!(matches!(
+            jailed_sibling.status,
+            PublicLaneValidatorStatus::Jailed(ref reason)
+                if reason == "vrf_penalty_epoch_2"
+        ));
     }
 
     #[test]
@@ -32505,6 +32745,12 @@ impl State {
         nexus_lane_active_for_authority(lane_id, dataspace_id, &nexus, self.lane_authority_height())
     }
 
+    /// Resolve the only lane allowed to own staking storage at the committed authority height.
+    pub(crate) fn staking_authority_lane(&self, lane_id: LaneId) -> Option<LaneId> {
+        let nexus = self.nexus_snapshot();
+        nexus_staking_authority_lane_at_height(lane_id, &nexus, self.lane_authority_height())
+    }
+
     fn lane_authority_height(&self) -> u64 {
         self.latest_block_header_fast()
             .map(|header| header.height().get())
@@ -32546,14 +32792,13 @@ impl State {
         }
         let (validators, bindings) = {
             let lane_manifests = self.lane_manifests.read();
-            if !Self::manifest_registry_matches_lane_dataspace(
+            let Ok(Some(rules)) = Self::manifest_authority_rules_for_lane(
                 lane_id,
                 dataspace_id,
                 lane_manifests.as_ref(),
-            ) {
-                return Vec::new();
-            }
-            let Some(rules) = lane_manifests.lane_rules(lane_id) else {
+                &nexus,
+                block_height,
+            ) else {
                 return Vec::new();
             };
             (rules.validators.clone(), rules.validator_bindings.clone())
@@ -32706,6 +32951,169 @@ impl State {
         )
     }
 
+    fn manifest_authority_rules_for_lane<'a>(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        manifest_registry: &'a LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> Result<Option<&'a GovernanceRules>, ()> {
+        let eligible_lanes = nexus_manifest_authority_eligible_lanes_at_height(
+            lane_id,
+            dataspace_id,
+            nexus,
+            block_height,
+        );
+        manifest_registry
+            .dataspace_authority_rules_for_lanes(lane_id, dataspace_id, &eligible_lanes)
+            .map_err(|_| ())
+    }
+
+    /// Resolve one physical dataspace's live stake projection.
+    ///
+    /// Lane-keyed stake rows are compatibility projections of dataspace-wide
+    /// authority. Empty sibling projections are ignored, while more than one
+    /// non-empty projection fails closed instead of retaining duplicate state
+    /// that a later lane-local mutation can split. Autoscale rows stay exact-lane;
+    /// their immutable peer committee is resolved before this helper.
+    fn live_dataspace_stake_authority_candidates_from_sources(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
+        let target_lane = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)?;
+        let source_lanes: BTreeSet<_> = if lane_uses_reserved_autoscale_metadata(target_lane) {
+            matches!(
+                validator_mode,
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+            .then_some(BTreeSet::from([lane_id]))
+            .unwrap_or_default()
+        } else {
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .filter(|lane| !lane_uses_reserved_autoscale_metadata(lane))
+                .filter(|lane| {
+                    nexus_active_lane_dataspace_at_height(lane.id, nexus, block_height)
+                        == Some(dataspace_id)
+                })
+                .filter(|lane| {
+                    matches!(
+                        nexus.staking.validator_mode(lane.id, &nexus.lane_catalog),
+                        iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                    )
+                })
+                .map(|lane| lane.id)
+                .collect()
+        };
+
+        let canonical_owner = if lane_uses_reserved_autoscale_metadata(target_lane) {
+            Some(lane_id)
+        } else {
+            nexus_staking_authority_lane_at_height(lane_id, nexus, block_height)
+        };
+        Self::live_stake_authority_candidates_for_lanes(
+            world,
+            source_lanes,
+            canonical_owner,
+            nexus,
+            block_height,
+        )
+    }
+
+    fn live_stake_authority_candidates_for_lanes(
+        world: &impl WorldReadOnly,
+        source_lanes: BTreeSet<LaneId>,
+        canonical_owner: Option<LaneId>,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> Option<Vec<(AccountId, PeerId, Quantity)>> {
+        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
+        let mut projections = BTreeMap::<LaneId, Vec<(AccountId, PeerId, Quantity)>>::new();
+        for (key, record) in world.public_lane_validators().iter() {
+            if !source_lanes.contains(&key.0)
+                || !public_lane_validator_record_matches_key(key, record)
+                || !matches!(record.status, PublicLaneValidatorStatus::Active)
+            {
+                continue;
+            }
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                &nexus.staking.min_validator_stake,
+            ) else {
+                continue;
+            };
+            if !meets_min
+                || !present_peers.contains(&record.peer_id)
+                || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
+            {
+                continue;
+            }
+            projections.entry(key.0).or_default().push((
+                record.validator.clone(),
+                record.peer_id.clone(),
+                record.total_stake.clone(),
+            ));
+        }
+
+        let mut selected_projection = None;
+        for source_lane in source_lanes {
+            let mut projection = projections.remove(&source_lane).unwrap_or_default();
+            projection.sort_by(|lhs, rhs| {
+                lhs.0
+                    .cmp(&rhs.0)
+                    .then_with(|| lhs.1.cmp(&rhs.1))
+                    .then_with(|| lhs.2.cmp(&rhs.2))
+            });
+            if projection.is_empty() {
+                continue;
+            }
+            if selected_projection.is_some() {
+                return None;
+            }
+            selected_projection = Some((source_lane, projection));
+        }
+
+        match selected_projection {
+            None => Some(Vec::new()),
+            Some((source_lane, projection)) if canonical_owner == Some(source_lane) => {
+                Some(projection)
+            }
+            Some(_) => None,
+        }
+    }
+
+    fn ranked_stake_authority_peer_pool(
+        mut candidates: Vec<(AccountId, PeerId, Quantity)>,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> Vec<PeerId> {
+        candidates.sort_by(|lhs, rhs| {
+            rhs.2
+                .cmp(&lhs.2)
+                .then_with(|| lhs.0.cmp(&rhs.0))
+                .then_with(|| lhs.1.cmp(&rhs.1))
+        });
+        candidates.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
+
+        let max = usize::try_from(nexus.staking.max_validators.get())
+            .unwrap_or(usize::MAX)
+            .min(candidates.len());
+        candidates
+            .into_iter()
+            .take(max)
+            .map(|(_, peer_id, _)| peer_id)
+            .collect()
+    }
+
     fn authoritative_lane_validator_accounts_from_sources(
         world: &impl WorldReadOnly,
         lane_id: LaneId,
@@ -32720,29 +33128,32 @@ impl State {
         if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
             return Vec::new();
         }
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(rules) = manifest_registry.lane_rules(lane_id)
-            && !rules.validator_bindings.is_empty()
-        {
-            let bindings = Self::live_manifest_validator_bindings_from_sources(
-                world,
-                rules.validator_bindings.clone(),
-                &rules.validators,
-                block_height,
-            );
-            return bindings
-                .into_iter()
-                .map(|binding| binding.validator)
-                .collect();
-        }
-
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(validators) = manifest_registry.lane_validators(lane_id)
-        {
+        let rules = match Self::manifest_authority_rules_for_lane(
+            lane_id,
+            dataspace_id,
+            manifest_registry,
+            nexus,
+            block_height,
+        ) {
+            Ok(rules) => rules,
+            Err(()) => return Vec::new(),
+        };
+        if let Some(rules) = rules {
+            if !rules.validator_bindings.is_empty() {
+                let bindings = Self::live_manifest_validator_bindings_from_sources(
+                    world,
+                    rules.validator_bindings.clone(),
+                    &rules.validators,
+                    block_height,
+                );
+                return bindings
+                    .into_iter()
+                    .map(|binding| binding.validator)
+                    .collect();
+            }
             return Self::live_manifest_validator_account_peers_from_sources(
                 world,
-                validators,
+                rules.validators.clone(),
                 block_height,
             )
             .into_iter()
@@ -32750,40 +33161,22 @@ impl State {
             .collect();
         }
 
-        if !matches!(
+        let Some(mut candidates) = Self::live_dataspace_stake_authority_candidates_from_sources(
+            world,
+            lane_id,
+            dataspace_id,
             validator_mode,
-            iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-        ) {
+            nexus,
+            block_height,
+        ) else {
             return Vec::new();
-        }
-
-        let mut candidates: Vec<(AccountId, Quantity)> = world
-            .public_lane_validators()
-            .iter()
-            .filter(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.0 == lane_id
-                    && matches!(record.status, PublicLaneValidatorStatus::Active)
-            })
-            .filter_map(|(_, record)| {
-                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    &nexus.staking.min_validator_stake,
-                ) else {
-                    return None;
-                };
-                if !meets_min {
-                    return None;
-                }
-                if !present_peers.contains(&record.peer_id)
-                    || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
-                {
-                    return None;
-                }
-                Some((record.validator.clone(), record.total_stake.clone()))
-            })
-            .collect();
-        candidates.sort_by(|lhs, rhs| rhs.1.cmp(&lhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
+        };
+        candidates.sort_by(|lhs, rhs| {
+            rhs.2
+                .cmp(&lhs.2)
+                .then_with(|| lhs.0.cmp(&rhs.0))
+                .then_with(|| lhs.1.cmp(&rhs.1))
+        });
         candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
 
         let max = usize::try_from(nexus.staking.max_validators.get())
@@ -32792,7 +33185,7 @@ impl State {
         candidates
             .into_iter()
             .take(max)
-            .map(|(account, _)| account)
+            .map(|(account, _, _)| account)
             .collect()
     }
 
@@ -32830,10 +33223,17 @@ impl State {
                 .map_or_else(Vec::new, |committee| committee.validator_set);
         }
 
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(rules) = manifest_registry.lane_rules(lane_id)
-        {
+        let rules = match Self::manifest_authority_rules_for_lane(
+            lane_id,
+            dataspace_id,
+            manifest_registry,
+            nexus,
+            block_height,
+        ) {
+            Ok(rules) => rules,
+            Err(()) => return Vec::new(),
+        };
+        if let Some(rules) = rules {
             if !rules.validator_bindings.is_empty() {
                 let bindings = Self::live_manifest_validator_bindings_from_sources(
                     world,
@@ -32847,14 +33247,9 @@ impl State {
                     .collect();
                 return pool;
             }
-        }
-
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(validators) = manifest_registry.lane_validators(lane_id)
-        {
             let pool: Vec<_> = Self::live_manifest_validator_account_peers_from_sources(
                 world,
-                validators,
+                rules.validators.clone(),
                 block_height,
             )
             .into_iter()
@@ -32863,59 +33258,17 @@ impl State {
             return pool;
         }
 
-        if !matches!(
+        let Some(candidates) = Self::live_dataspace_stake_authority_candidates_from_sources(
+            world,
+            lane_id,
+            dataspace_id,
             validator_mode,
-            iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-        ) {
+            nexus,
+            block_height,
+        ) else {
             return Vec::new();
-        }
-
-        let mut candidates: Vec<(AccountId, PeerId, Quantity)> = world
-            .public_lane_validators()
-            .iter()
-            .filter(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.0 == lane_id
-                    && matches!(record.status, PublicLaneValidatorStatus::Active)
-            })
-            .filter_map(|(_, record)| {
-                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    &nexus.staking.min_validator_stake,
-                ) else {
-                    return None;
-                };
-                if !meets_min {
-                    return None;
-                }
-                if !present_peers.contains(&record.peer_id)
-                    || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
-                {
-                    return None;
-                }
-                Some((
-                    record.validator.clone(),
-                    record.peer_id.clone(),
-                    record.total_stake.clone(),
-                ))
-            })
-            .collect();
-        candidates.sort_by(|lhs, rhs| {
-            rhs.2
-                .cmp(&lhs.2)
-                .then_with(|| lhs.0.cmp(&rhs.0))
-                .then_with(|| lhs.1.cmp(&rhs.1))
-        });
-        candidates.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
-
-        let max = usize::try_from(nexus.staking.max_validators.get())
-            .unwrap_or(usize::MAX)
-            .min(candidates.len());
-        candidates
-            .into_iter()
-            .take(max)
-            .map(|(_, peer_id, _)| peer_id)
-            .collect()
+        };
+        Self::ranked_stake_authority_peer_pool(candidates, nexus)
     }
 
     /// Derive the initial committee for a brand-new autoscale lane incarnation.
@@ -32961,9 +33314,40 @@ impl State {
             return Vec::new();
         }
         let dataspace_id = lane.dataspace_id;
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(rules) = manifest_registry.lane_rules(lane_id)
-        {
+        let exact_manifest_rules = match manifest_registry.status(lane_id) {
+            Some(status) if status.dataspace != dataspace_id => return Vec::new(),
+            Some(status) => {
+                if manifest_registry.ensure_lane_ready(lane_id).is_err() {
+                    return Vec::new();
+                }
+                status.rules().filter(|rules| !rules.validators.is_empty())
+            }
+            None => None,
+        };
+        let manifest_rules = if exact_manifest_rules.is_some() {
+            exact_manifest_rules
+        } else {
+            let eligible_lanes = nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .filter(|candidate| !lane_uses_reserved_autoscale_metadata(candidate))
+                .filter(|candidate| {
+                    nexus_active_lane_dataspace_at_height(candidate.id, nexus, proposal_height)
+                        == Some(dataspace_id)
+                })
+                .map(|candidate| candidate.id)
+                .collect();
+            match manifest_registry.dataspace_authority_rules_for_lanes(
+                lane_id,
+                dataspace_id,
+                &eligible_lanes,
+            ) {
+                Ok(rules) => rules,
+                Err(_) => return Vec::new(),
+            }
+        };
+        if let Some(rules) = manifest_rules {
             if !rules.validator_bindings.is_empty() {
                 let pool = Self::live_manifest_validator_bindings_from_sources(
                     world,
@@ -32984,18 +33368,56 @@ impl State {
                     proposal_height,
                 );
             }
-        }
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(validators) = manifest_registry.lane_validators(lane_id)
-        {
             let pool = Self::live_manifest_validator_account_peers_from_sources(
                 world,
-                validators,
+                rules.validators.clone(),
                 proposal_height,
             )
             .into_iter()
             .map(|(_, peer)| peer)
             .collect::<Vec<_>>();
+            return Self::autoscale_lane_committee_from_pool(
+                world,
+                network_id,
+                lane_id,
+                dataspace_id,
+                nexus,
+                &pool,
+                proposal_height,
+            );
+        }
+
+        let stake_source_lanes: BTreeSet<_> = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter(|candidate| !lane_uses_reserved_autoscale_metadata(candidate))
+            .filter(|candidate| {
+                nexus_active_lane_dataspace_at_height(candidate.id, nexus, proposal_height)
+                    == Some(dataspace_id)
+            })
+            .filter(|candidate| {
+                matches!(
+                    nexus
+                        .staking
+                        .validator_mode(candidate.id, &nexus.lane_catalog),
+                    iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                )
+            })
+            .map(|candidate| candidate.id)
+            .collect();
+        let canonical_owner = stake_source_lanes.iter().next().copied();
+        let Some(stake_candidates) = Self::live_stake_authority_candidates_for_lanes(
+            world,
+            stake_source_lanes,
+            canonical_owner,
+            nexus,
+            proposal_height,
+        ) else {
+            return Vec::new();
+        };
+        if !stake_candidates.is_empty() {
+            let pool = Self::ranked_stake_authority_peer_pool(stake_candidates, nexus);
             return Self::autoscale_lane_committee_from_pool(
                 world,
                 network_id,
@@ -33140,16 +33562,6 @@ impl State {
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Option<DataSpaceId> {
         nexus_active_lane_dataspace(lane_id, nexus)
-    }
-
-    fn manifest_registry_matches_lane_dataspace(
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        manifest_registry: &LaneManifestRegistry,
-    ) -> bool {
-        manifest_registry
-            .status(lane_id)
-            .is_some_and(|status| status.dataspace == dataspace_id)
     }
 
     fn live_commit_topology_peers(
@@ -43032,6 +43444,16 @@ impl State {
                     && nexus.lane_config.entry(*lane_id).is_some()
             })
             .collect::<BTreeSet<_>>();
+        {
+            let world = self.world.view();
+            ensure_live_shared_dataspace_staking_owner_is_not_reset(
+                &world,
+                &previous_nexus,
+                &nexus,
+                &lanes_to_reset,
+                current_block_height,
+            )?;
+        }
         self.apply_lane_geometry_updates(
             &previous_lane_config,
             &nexus.lane_config,
@@ -43484,6 +43906,17 @@ impl State {
                     plan,
                     current_block_height,
                     allow_autoscale_managed_changes,
+                )?;
+                let world = self.world.view();
+                let mut prospective_nexus = nexus.clone();
+                prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
+                prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+                ensure_live_shared_dataspace_staking_owner_is_not_reset(
+                    &world,
+                    &nexus,
+                    &prospective_nexus,
+                    &lifecycle_update.lanes_to_reset,
+                    current_block_height,
                 )?;
                 let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
                     self.lane_manifests.read().as_ref(),
@@ -44161,7 +44594,7 @@ impl State {
         }
         pending
             .updated_lane_manifests
-            .validate_active_coverage()
+            .validate_active_coverage_for_catalog(&expected_update.updated_catalog)
             .map_err(|err| LaneLifecycleError::ManifestPolicyUnavailable {
                 lane: err.lane,
                 reason: err.message(),
@@ -44514,7 +44947,7 @@ impl State {
         }
         pending
             .updated_lane_manifests
-            .validate_active_coverage()
+            .validate_active_coverage_for_catalog(&expected_catalog)
             .map_err(|err| LaneLifecycleError::ManifestPolicyUnavailable {
                 lane: err.lane,
                 reason: err.message(),
@@ -45969,6 +46402,156 @@ impl PendingAutoscaleTransition {
     }
 }
 
+const LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON: &str =
+    "it contains live shared-dataspace staking state across a canonical owner reset or change";
+
+fn static_staking_owner_for_dataspace_at_height(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    dataspace_id: DataSpaceId,
+    block_height: u64,
+) -> Option<LaneId> {
+    if !nexus.enabled {
+        return (dataspace_id == DataSpaceId::UNIVERSAL).then_some(LaneId::SINGLE);
+    }
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| !lane_uses_reserved_autoscale_metadata(lane))
+        .filter(|lane| {
+            nexus_active_lane_dataspace_at_height(lane.id, nexus, block_height)
+                == Some(dataspace_id)
+        })
+        .filter(|lane| {
+            matches!(
+                nexus.staking.validator_mode(lane.id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .map(|lane| lane.id)
+        .min()
+}
+
+fn live_staking_projection_lane_for_lanes(
+    world: &impl WorldReadOnly,
+    lanes: &BTreeSet<LaneId>,
+) -> Option<LaneId> {
+    let validator_lanes = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(_, record)| {
+            !matches!(record.status, PublicLaneValidatorStatus::Exited)
+                || !record.total_stake.is_zero()
+                || !record.self_stake.is_zero()
+        })
+        .filter_map(|(key, record)| {
+            lanes
+                .contains(&key.0)
+                .then_some(key.0)
+                .or_else(|| lanes.contains(&record.lane_id).then_some(record.lane_id))
+        });
+    let share_lanes = world
+        .public_lane_stake_shares()
+        .iter()
+        .filter(|(_, share)| !share.bonded.is_zero() || !share.pending_unbonds.is_empty())
+        .filter_map(|(key, share)| {
+            lanes
+                .contains(&key.0)
+                .then_some(key.0)
+                .or_else(|| lanes.contains(&share.lane_id).then_some(share.lane_id))
+        });
+    validator_lanes.chain(share_lanes).min()
+}
+
+fn ensure_live_shared_dataspace_staking_owner_is_not_reset(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    prospective_nexus: &iroha_config::parameters::actual::Nexus,
+    lanes_to_reset: &BTreeSet<LaneId>,
+    block_height: u64,
+) -> Result<(), LaneLifecycleError> {
+    let dataspaces = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| !lane_uses_reserved_autoscale_metadata(lane))
+        .map(|lane| lane.dataspace_id)
+        .collect::<BTreeSet<_>>();
+    for dataspace_id in dataspaces {
+        let current_owner =
+            static_staking_owner_for_dataspace_at_height(nexus, dataspace_id, block_height);
+        let prospective_owner = static_staking_owner_for_dataspace_at_height(
+            prospective_nexus,
+            dataspace_id,
+            block_height,
+        );
+        let current_dataspace_lanes = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter(|lane| {
+                lane.dataspace_id == dataspace_id && !lane_uses_reserved_autoscale_metadata(lane)
+            })
+            .map(|lane| lane.id)
+            .collect::<BTreeSet<_>>();
+        let prospective_dataspace_lanes = prospective_nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter(|lane| {
+                lane.dataspace_id == dataspace_id && !lane_uses_reserved_autoscale_metadata(lane)
+            })
+            .map(|lane| lane.id)
+            .collect::<BTreeSet<_>>();
+        let full_dataspace_retirement = prospective_dataspace_lanes.is_empty()
+            && current_dataspace_lanes
+                .iter()
+                .all(|lane| lanes_to_reset.contains(lane));
+        if full_dataspace_retirement {
+            continue;
+        }
+        let sibling_survives = prospective_nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|candidate| {
+                Some(candidate.id) != current_owner
+                    && !lane_uses_reserved_autoscale_metadata(candidate)
+                    && nexus_active_lane_dataspace_at_height(
+                        candidate.id,
+                        prospective_nexus,
+                        block_height,
+                    ) == Some(dataspace_id)
+                    && matches!(
+                        prospective_nexus
+                            .staking
+                            .validator_mode(candidate.id, &prospective_nexus.lane_catalog),
+                        iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+                    )
+            });
+        let owner_changes = current_owner != prospective_owner;
+        let owner_is_reset_while_sibling_survives =
+            current_owner.is_some_and(|lane| lanes_to_reset.contains(&lane) && sibling_survives);
+        if !owner_changes && !owner_is_reset_while_sibling_survives {
+            continue;
+        }
+
+        let relevant_lanes = if owner_changes {
+            current_dataspace_lanes
+        } else {
+            BTreeSet::from([current_owner.expect("reset owner must exist")])
+        };
+        if let Some(live_lane) = live_staking_projection_lane_for_lanes(world, &relevant_lanes) {
+            return Err(LaneLifecycleError::UnsafeRetirement {
+                lane: current_owner.unwrap_or(live_lane),
+                reason: LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 fn prepare_lane_lifecycle_update(
     nexus: &iroha_config::parameters::actual::Nexus,
     previous_lane_incarnations: &BTreeMap<LaneId, Hash>,
@@ -46928,19 +47511,10 @@ fn ensure_autoscale_base_profile_supported(
             reason: "private storage profiles require lane-specific manifest commitments",
         });
     }
-    if manifest_registry
-        .and_then(|registry| registry.status(lane_id))
-        .is_some_and(|status| {
-            status.manifest_path.is_some()
-                || status.rules().is_some()
-                || !status.privacy_commitments().is_empty()
-        })
-    {
-        return Err(LaneLifecycleError::AutoscaleBaseProfileUnsupported {
-            lane: lane_id,
-            reason: "loaded base manifest semantics are alias-specific",
-        });
-    }
+    // A loaded base manifest remains lane-local: scale-out samples only its
+    // dataspace authority fields and never copies hooks, namespaces, or
+    // privacy commitments onto the new elastic alias. Exact pre-provisioned
+    // semantics for that prospective alias remain unsupported below.
     if prospective_alias.is_some_and(|alias| {
         manifest_registry.is_some_and(|registry| registry.has_manifest_source_alias(alias))
     }) {
@@ -46974,12 +47548,12 @@ fn rebind_lane_manifests_for_lifecycle(
     governance: &iroha_config::parameters::actual::GovernanceCatalog,
 ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
     let rebound = Arc::new(registry.rebind(catalog, governance));
-    rebound.validate_active_coverage().map_err(|err| {
-        LaneLifecycleError::ManifestPolicyUnavailable {
+    rebound
+        .validate_active_coverage_for_catalog(catalog)
+        .map_err(|err| LaneLifecycleError::ManifestPolicyUnavailable {
             lane: err.lane,
             reason: err.message(),
-        }
-    })?;
+        })?;
     Ok(rebound)
 }
 
@@ -54401,6 +54975,16 @@ impl<'state> StateBlock<'state> {
             block_height,
             true,
         )?;
+        let mut prospective_nexus = self.nexus.clone();
+        prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
+        prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+        ensure_live_shared_dataspace_staking_owner_is_not_reset(
+            &self.world,
+            &self.nexus,
+            &prospective_nexus,
+            &lifecycle_update.lanes_to_reset,
+            block_height,
+        )?;
         let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
             self.lane_manifests.as_ref(),
             &lifecycle_update.updated_catalog,
@@ -60717,6 +61301,16 @@ impl StateTransaction<'_, '_> {
             &payload.plan,
             block_height,
             false,
+        )?;
+        let mut prospective_nexus = self.nexus.clone();
+        prospective_nexus.lane_catalog = lifecycle_update.updated_catalog.clone();
+        prospective_nexus.lane_config = lifecycle_update.updated_lane_config.clone();
+        ensure_live_shared_dataspace_staking_owner_is_not_reset(
+            &self.world,
+            &self.nexus,
+            &prospective_nexus,
+            &lifecycle_update.lanes_to_reset,
+            block_height,
         )?;
         let updated_lane_manifests = rebind_lane_manifests_for_lifecycle(
             self.lane_manifests.as_ref(),

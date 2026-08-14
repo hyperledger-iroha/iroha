@@ -146,21 +146,46 @@ to:
   physical ordinals: ordinary dequeue and lifecycle discovery share the same
   ready-source/lane, strict-before-dependency selector, and the lifecycle path
   returns a recovered selector only when that exact fair winner owns the
-  authenticated response family. Complete the unified Completion/Ingress
-  driver before cutover. It must retain ordinary pass-through ownership and a
-  stateful current-height Certified-Serve preparation/capacity-wait token,
-  because Serve admission can create off-queue debt and cannot be represented
-  by the inert queue probe alone. It must also classify all recovered Ready
-  work before consuming a runner turn and retain Apply deferral plus guarded
-  Sign/Fetch completions internally. The runner's freshly opened body store
-  must first enter a
+  authenticated response family. A lifecycle-owned unified Completion/Ingress
+  turn driver prerequisite is now landed around the real borrow-bound runner
+  cursor, but the production runner loop deliberately does not call it yet.
+  It retains Apply deferral, guarded Sign/Fetch completions, and recovered
+  ingress capacity waits internally; takes at most one physical Completion
+  head; classifies the complete Ready census; and returns the unchanged cursor
+  only when no fair ingress winner exists. Its queue-owned ordinary ingress
+  prerequisite now freezes that exact fair winner, prepares current-height
+  Certified-Serve state under the legacy lock/transaction discipline, and
+  physically removes the same occurrence into an opaque fail-stop token.
+  Backpressure retains the carrier plus off-queue debt, while recovered
+  Decision-Fetch retains its queue witness through Phase A. Mixed
+  Apply/Sign/Fetch Ready rows now freeze one composite worker/output-capacity
+  census and transfer only the ranked row's typed reservation. A sealed
+  preactivation runner key now permits one callback over only the launched
+  executor and services while exact
+  output ownership, closed ingress, the retained observer, and unarmed clocks
+  hold before and after the callback. Recovered ProposalIntent ownership is
+  retained through cold adapter advancement and can clear its activation
+  blocker only by binding the matching reducer directive into a move-only
+  prepared runner state which ordinary and CompleteTip activation retain. The
+  production runner still needs to mint/use that state in place of its legacy
+  local-Proposal scheduler at the atomic cutover. An
+  armed non-permit fail-stop scope closes output on error or unwind without
+  retaining a read permit across nested service fail-stop code.
+  The ordinary token now enters the same private runner-owned post-dequeue
+  consumer used by the legacy loop, and the opaque `PendingKuraApply`
+  Decision-Fetch/WAL/runtime replay join is sealed through preactivation.
+  Before cutover, wire the preactivation key mint, add PendingKura's dedicated
+  no-clock lane-recovery/finalization state, and atomically replace the legacy
+  loop owner. The runner's
+  freshly opened body store must first enter a
   move-only quarantine that rejects any already promoted, rejected, or retired
   marker, then enter the sole production factory with an adapter-bound
   execution/storage seal. The quarantine's only consuming transition fixes
   finality filtering, WAL-authority filtering, semantic marker replay, and
   sealing with the same `V2ApplyService` the owner retains for launch. It has
   no root-reopen or raw validation-callback alternative. A private runner-only
-  permit now seals the prerequisite dependency/local-signer handoff, but its
+  permit now seals the prerequisite dependency/local-signer/authenticated-cadence handoff,
+  avoiding the uncommitted State placeholder at fresh height one, but its
   production mint remains intentionally unwired until the atomic runner
   cutover; launch will reject a different peer key or incorrect claimed
   validator position before gate/runtime creation. Authenticated height recovery now
@@ -170,6 +195,10 @@ to:
   retains the universal genesis account derived from its authenticated genesis
   key; the factory moves that account into its single replay/live service only
   after exact State/Kura Arc, network, storage, and startup-instance checks.
+  Verified live successors now retain that State-owned Kura identity and can
+  consume themselves into context, activation, and a rotating-policy lifecycle
+  storage authority; the runner remains intentionally unwired from this new
+  projection until the atomic owner switch.
   The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire

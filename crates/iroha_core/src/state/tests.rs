@@ -15433,6 +15433,113 @@ fn autoscale_scale_out_committee_preflight_accepts_four_live_peers() {
 }
 
 #[test]
+fn autoscale_scale_out_committee_uses_same_dataspace_manifest_pool() {
+    let state = autoscale_committee_guard_test_state();
+    let topology_keypairs = seed_autoscale_committee_for_test(&state, 4);
+    let (manifest_validators, manifest_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &manifest_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, manifest_validators)],
+    );
+    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+    let mut state_block = state.block(second.header());
+
+    state_block
+        .apply_autoscale_lane_lifecycle(
+            &autoscale_scale_out_plan_for_test(2),
+            autoscale_scale_out_transition_for_test(),
+        )
+        .expect("the existing dataspace manifest must seed the new lane committee");
+
+    let committee = decode_autoscale_lane_committee(
+        state_block
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == LaneId::new(1))
+            .expect("new autoscale lane"),
+    )
+    .expect("valid committee pin")
+    .expect("committee pin is present")
+    .validator_set;
+    let mut expected = manifest_keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(committee, expected);
+    assert!(committee.iter().all(|peer| {
+        topology_keypairs
+            .iter()
+            .all(|keypair| peer.public_key() != keypair.public_key())
+    }));
+    let elastic_status = state_block
+        .pending_autoscale_lifecycle
+        .as_ref()
+        .expect("staged autoscale lifecycle")
+        .updated_lane_manifests
+        .status(LaneId::new(1))
+        .expect("new autoscale lane manifest status");
+    assert!(elastic_status.manifest_path.is_none());
+    assert!(elastic_status.rules().is_none());
+    assert!(elastic_status.privacy_commitments().is_empty());
+}
+
+#[test]
+fn autoscale_scale_out_committee_uses_same_dataspace_stake_pool() {
+    let state = autoscale_committee_guard_test_state();
+    let topology_keypairs = seed_autoscale_committee_for_test(&state, 4);
+    let (stake_validators, stake_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &stake_keypairs);
+    for (validator, keypair) in stake_validators.iter().zip(&stake_keypairs) {
+        insert_active_public_lane_validator_for_test(
+            &state,
+            LaneId::SINGLE,
+            validator,
+            keypair,
+            1_000_000,
+        );
+    }
+    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+    let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+    let mut state_block = state.block(second.header());
+
+    state_block
+        .apply_autoscale_lane_lifecycle(
+            &autoscale_scale_out_plan_for_test(2),
+            autoscale_scale_out_transition_for_test(),
+        )
+        .expect("the existing dataspace stake pool must seed the new lane committee");
+
+    let committee = decode_autoscale_lane_committee(
+        state_block
+            .nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == LaneId::new(1))
+            .expect("new autoscale lane"),
+    )
+    .expect("valid committee pin")
+    .expect("committee pin is present")
+    .validator_set;
+    let mut expected = stake_keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(committee, expected);
+    assert!(committee.iter().all(|peer| {
+        topology_keypairs
+            .iter()
+            .all(|keypair| peer.public_key() != keypair.public_key())
+    }));
+}
+
+#[test]
 fn autoscale_scale_out_committee_preflight_rejects_three_peers_atomically() {
     let state = autoscale_committee_guard_test_state();
     seed_autoscale_committee_for_test(&state, 3);
@@ -15536,7 +15643,7 @@ fn autoscale_scale_out_committee_preflight_rejects_insufficient_explicit_manifes
     seed_consensus_keys_with_pops(&state, &manifest_keypairs);
     install_lane_manifest_registry(
         &state,
-        &[(LaneId::new(1), DataSpaceId::UNIVERSAL, manifest_validators)],
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, manifest_validators)],
     );
     let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
     let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -15569,7 +15676,7 @@ fn autoscale_scale_out_committee_preflight_rejects_duplicate_manifest_authority(
     manifest_validators[3] = manifest_validators[2].clone();
     install_lane_manifest_registry(
         &state,
-        &[(LaneId::new(1), DataSpaceId::UNIVERSAL, manifest_validators)],
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, manifest_validators)],
     );
     let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
     let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -34122,6 +34229,59 @@ fn configure_restricted_lane_for_manifest_binding_test(
         .expect("apply nexus config");
 }
 
+fn configure_two_universal_authority_lanes_for_test(
+    state: &mut State,
+    second_visibility: LaneVisibility,
+) {
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: LaneId::new(1),
+                        alias: "universal-secondary".to_owned(),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        visibility: second_visibility,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("same-dataspace lane catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        })
+        .expect("apply same-dataspace Nexus config");
+}
+
+fn insert_active_public_lane_validator_for_test(
+    state: &State,
+    lane_id: LaneId,
+    validator: &AccountId,
+    keypair: &KeyPair,
+    stake: u64,
+) {
+    let mut world_block = state.world.block();
+    world_block.public_lane_validators.insert(
+        (lane_id, validator.clone()),
+        PublicLaneValidatorRecord {
+            lane_id,
+            validator: validator.clone(),
+            peer_id: PeerId::new(keypair.public_key().clone()),
+            stake_account: validator.clone(),
+            total_stake: Quantity::from(stake),
+            self_stake: Quantity::from(stake),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    world_block.commit();
+}
+
 fn bls_account_in(_domain: &str) -> (AccountId, KeyPair) {
     let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let account_id = AccountId::new(keypair.public_key().clone());
@@ -38510,6 +38670,671 @@ fn lane_relay_validator_pool_uses_stake_when_no_manifest() {
 }
 
 #[test]
+fn same_dataspace_stake_authority_projects_to_restricted_sibling_lane() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    configure_two_universal_authority_lanes_for_test(&mut state, LaneVisibility::Restricted);
+
+    let source_lane = LaneId::SINGLE;
+    let target_lane = LaneId::new(1);
+    let (validator, keypair) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+    insert_active_public_lane_validator_for_test(
+        &state,
+        source_lane,
+        &validator,
+        &keypair,
+        1_000_000,
+    );
+    install_lane_manifest_registry(&state, &[(target_lane, DataSpaceId::UNIVERSAL, Vec::new())]);
+
+    let expected_peer = PeerId::new(keypair.public_key().clone());
+    assert_eq!(
+        state.authoritative_lane_validator_accounts(target_lane),
+        vec![validator],
+        "an exact policy-only manifest must not mask the dataspace stake authority"
+    );
+    assert_eq!(
+        state.authoritative_lane_peer_ids(target_lane),
+        vec![expected_peer],
+        "a restricted lane must inherit its physical dataspace's live stake-elected peers"
+    );
+}
+
+#[test]
+fn same_dataspace_manifest_authority_projects_to_policy_only_sibling_lane() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    configure_two_universal_authority_lanes_for_test(&mut state, LaneVisibility::Restricted);
+
+    let source_lane = LaneId::SINGLE;
+    let target_lane = LaneId::new(1);
+    let (validator, keypair) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (source_lane, DataSpaceId::UNIVERSAL, vec![validator.clone()]),
+            (target_lane, DataSpaceId::UNIVERSAL, Vec::new()),
+        ],
+    );
+
+    let expected_peer = PeerId::new(keypair.public_key().clone());
+    assert_eq!(
+        state.authoritative_lane_validator_accounts(target_lane),
+        vec![validator]
+    );
+    assert_eq!(
+        state.authoritative_lane_peer_ids(target_lane),
+        vec![expected_peer.clone()]
+    );
+    assert_eq!(
+        state
+            .manifest_lane_validator_bindings(target_lane)
+            .into_iter()
+            .map(|binding| binding.peer_id)
+            .collect::<Vec<_>>(),
+        vec![expected_peer],
+        "transport bindings must follow the same effective dataspace manifest authority"
+    );
+}
+
+#[test]
+fn static_manifest_authority_ignores_conflicting_autoscale_manifest() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let autoscale_lane = LaneId::new(1);
+    install_autoscale_elastic_catalog_for_test(
+        &state,
+        autoscale_elastic_catalog_lane_for_test(autoscale_lane, 1),
+    );
+    seed_latest_lane_authority_height_for_test(&state, 1);
+
+    let (static_validator, static_keypair) = bls_account_in("validators");
+    let (elastic_validator, elastic_keypair) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, &[static_keypair.clone(), elastic_keypair.clone()]);
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                vec![static_validator.clone()],
+            ),
+            (
+                autoscale_lane,
+                DataSpaceId::UNIVERSAL,
+                vec![elastic_validator.clone()],
+            ),
+        ],
+    );
+
+    assert_eq!(
+        state.authoritative_lane_validator_accounts(LaneId::SINGLE),
+        vec![static_validator],
+        "an elastic lane manifest must not conflict with static dataspace authority"
+    );
+    assert_eq!(
+        state.authoritative_lane_validator_accounts(autoscale_lane),
+        vec![elastic_validator],
+        "an autoscale target must retain its exact manifest authority"
+    );
+}
+
+#[test]
+fn singleton_non_owner_same_dataspace_stake_projection_fails_closed() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    configure_two_universal_authority_lanes_for_test(&mut state, LaneVisibility::Public);
+
+    let canonical_lane = LaneId::SINGLE;
+    let non_owner_lane = LaneId::new(1);
+    let (validator, keypair) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+    insert_active_public_lane_validator_for_test(
+        &state,
+        non_owner_lane,
+        &validator,
+        &keypair,
+        1_000_000,
+    );
+
+    for lane_id in [canonical_lane, non_owner_lane] {
+        assert!(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .is_empty(),
+            "a singleton non-owner projection must not become account authority"
+        );
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "a singleton non-owner projection must not become peer authority"
+        );
+    }
+}
+
+#[test]
+fn conflicting_same_dataspace_stake_projections_fail_closed() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    configure_two_universal_authority_lanes_for_test(&mut state, LaneVisibility::Public);
+
+    let lane_a = LaneId::SINGLE;
+    let lane_b = LaneId::new(1);
+    let (validator_a, keypair_a) = bls_account_in("validators");
+    let (validator_b, keypair_b) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, &[keypair_a.clone(), keypair_b.clone()]);
+    insert_active_public_lane_validator_for_test(
+        &state,
+        lane_a,
+        &validator_a,
+        &keypair_a,
+        1_000_000,
+    );
+    insert_active_public_lane_validator_for_test(
+        &state,
+        lane_b,
+        &validator_b,
+        &keypair_b,
+        1_000_000,
+    );
+
+    for lane_id in [lane_a, lane_b] {
+        assert!(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .is_empty(),
+            "conflicting sibling projections must not be unioned into account authority"
+        );
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "conflicting sibling projections must not be unioned into peer authority"
+        );
+    }
+}
+
+#[test]
+fn duplicate_same_dataspace_stake_projections_fail_closed() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    configure_two_universal_authority_lanes_for_test(&mut state, LaneVisibility::Public);
+
+    let lane_a = LaneId::SINGLE;
+    let lane_b = LaneId::new(1);
+    let (validator, keypair) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+    for lane_id in [lane_a, lane_b] {
+        insert_active_public_lane_validator_for_test(
+            &state, lane_id, &validator, &keypair, 1_000_000,
+        );
+    }
+
+    for lane_id in [lane_a, lane_b] {
+        assert!(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .is_empty(),
+            "duplicate lane-keyed account projections are not a safe shared authority"
+        );
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "duplicate lane-keyed peer projections must fail closed before they diverge"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_rejects_resetting_live_shared_dataspace_staking_owner_atomically() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let owner_lane = LaneId::new(1);
+    let sibling_lane = LaneId::new(2);
+    let shared_dataspace = DataSpaceId::new(9);
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(
+                nonzero!(3_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: owner_lane,
+                        alias: "shared-staking-owner".to_owned(),
+                        dataspace_id: shared_dataspace,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: sibling_lane,
+                        alias: "shared-staking-survivor".to_owned(),
+                        dataspace_id: shared_dataspace,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("shared-dataspace lifecycle catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: shared_dataspace,
+                    alias: "shared-staking".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("shared-dataspace lifecycle dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        })
+        .expect("apply shared-dataspace lifecycle Nexus config");
+    let (validator, keypair) = bls_account_in("validators");
+    insert_active_public_lane_validator_for_test(
+        &state, owner_lane, &validator, &keypair, 1_000_000,
+    );
+    let catalog_before = state.nexus_snapshot().lane_catalog;
+    let validator_before = state
+        .world
+        .public_lane_validators
+        .view()
+        .get(&(owner_lane, validator.clone()))
+        .expect("live owner validator")
+        .clone();
+
+    let retire = iroha_data_model::nexus::LaneLifecyclePlan {
+        additions: Vec::new(),
+        retire: vec![owner_lane],
+    };
+    let replace = iroha_data_model::nexus::LaneLifecyclePlan {
+        additions: vec![LaneConfig {
+            id: owner_lane,
+            alias: "shared-staking-owner-replacement".to_owned(),
+            dataspace_id: shared_dataspace,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        }],
+        retire: vec![owner_lane],
+    };
+
+    {
+        let updated_catalog = catalog_before
+            .apply_lifecycle(&retire)
+            .expect("owner retirement yields a catalog retaining the sibling");
+        let nexus = state.nexus_snapshot();
+        let mut prospective_nexus = nexus.clone();
+        prospective_nexus.lane_catalog = updated_catalog;
+        prospective_nexus.lane_config =
+            RuntimeLaneConfig::from_catalog(&prospective_nexus.lane_catalog);
+        let world = state.world.view();
+        let err = ensure_live_shared_dataspace_staking_owner_is_not_reset(
+            &world,
+            &nexus,
+            &prospective_nexus,
+            &BTreeSet::from([owner_lane]),
+            0,
+        )
+        .expect_err("the direct lifecycle guard must reject the live owner reset");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::UnsafeRetirement { lane, reason }
+                if lane == owner_lane
+                    && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+        ));
+    }
+
+    for (operation, plan) in [("retire", retire), ("replace", replace)] {
+        let err = match state.apply_lane_lifecycle(&plan) {
+            Ok(()) => panic!("{operation} unexpectedly reset the live owner"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            LaneLifecycleError::UnsafeRetirement { lane, reason }
+                if lane == owner_lane
+                    && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+        ));
+        assert_eq!(state.nexus_snapshot().lane_catalog, catalog_before);
+        let world = state.world.view();
+        assert_eq!(
+            world
+                .public_lane_validators()
+                .get(&(owner_lane, validator.clone())),
+            Some(&validator_before),
+            "rejected {operation} must preserve the live owner row"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_rejects_lower_lane_takeover_of_live_shared_dataspace_staking_owner() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let new_lower_lane = LaneId::new(1);
+    let owner_lane = LaneId::new(2);
+    let shared_dataspace = DataSpaceId::new(9);
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(
+                nonzero!(3_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: owner_lane,
+                        alias: "current-shared-staking-owner".to_owned(),
+                        dataspace_id: shared_dataspace,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("sparse shared-dataspace lifecycle catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: shared_dataspace,
+                    alias: "shared-staking".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("shared-dataspace lifecycle dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        })
+        .expect("apply sparse shared-dataspace lifecycle Nexus config");
+    let (validator, keypair) = bls_account_in("validators");
+    insert_active_public_lane_validator_for_test(
+        &state, owner_lane, &validator, &keypair, 1_000_000,
+    );
+    let catalog_before = state.nexus_snapshot().lane_catalog;
+    let validator_before = state
+        .world
+        .public_lane_validators
+        .view()
+        .get(&(owner_lane, validator.clone()))
+        .expect("live owner validator")
+        .clone();
+
+    let err = state
+        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: new_lower_lane,
+                alias: "prospective-lower-staking-owner".to_owned(),
+                dataspace_id: shared_dataspace,
+                visibility: LaneVisibility::Public,
+                ..LaneConfig::default()
+            }],
+            retire: Vec::new(),
+        })
+        .expect_err("a lower lane must not take over a live shared staking projection");
+    assert!(matches!(
+        err,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == owner_lane
+                && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+    ));
+    assert_eq!(state.nexus_snapshot().lane_catalog, catalog_before);
+    let world = state.world.view();
+    assert_eq!(
+        world.public_lane_validators().get(&(owner_lane, validator)),
+        Some(&validator_before),
+        "rejected owner takeover must preserve the live owner row"
+    );
+}
+
+#[test]
+fn set_nexus_rejects_two_step_staking_mode_toggle_with_live_shared_state() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let prospective_owner = LaneId::new(1);
+    let current_owner = LaneId::new(2);
+    let shared_dataspace = DataSpaceId::new(9);
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: LaneCatalog::new(
+                nonzero!(3_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: prospective_owner,
+                        alias: "restricted-prospective-owner".to_owned(),
+                        dataspace_id: shared_dataspace,
+                        visibility: LaneVisibility::Restricted,
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: current_owner,
+                        alias: "public-current-owner".to_owned(),
+                        dataspace_id: shared_dataspace,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("mixed-visibility shared-dataspace catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: shared_dataspace,
+                    alias: "shared-staking".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("shared-dataspace lifecycle dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        })
+        .expect("apply mixed-visibility shared-dataspace Nexus config");
+    let (validator, keypair) = bls_account_in("validators");
+    insert_active_public_lane_validator_for_test(
+        &state,
+        current_owner,
+        &validator,
+        &keypair,
+        1_000_000,
+    );
+    let nexus_before = state.nexus_snapshot();
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(current_owner, &nexus_before, 0),
+        Some(current_owner)
+    );
+    let validator_before = state
+        .world
+        .public_lane_validators
+        .view()
+        .get(&(current_owner, validator.clone()))
+        .expect("live owner validator")
+        .clone();
+
+    let mut all_admin = nexus_before.clone();
+    all_admin.staking.public_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    let err = state
+        .set_nexus(all_admin.clone())
+        .expect_err("staking-mode reconfiguration must not remove a live shared owner");
+    assert!(matches!(
+        err,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == current_owner
+                && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+    ));
+    let nexus_after = state.nexus_snapshot();
+    assert_eq!(
+        nexus_after.staking.public_validator_mode,
+        nexus_before.staking.public_validator_mode
+    );
+    assert_eq!(
+        nexus_after.staking.restricted_validator_mode,
+        nexus_before.staking.restricted_validator_mode
+    );
+    let world = state.world.view();
+    assert_eq!(
+        world
+            .public_lane_validators()
+            .get(&(current_owner, validator)),
+        Some(&validator_before),
+        "rejected owner removal must preserve the live owner row"
+    );
+
+    let restored = State::new_with_nexus_for_testing(
+        World::default(),
+        all_admin.clone(),
+        LiveQueryStore::start_test(),
+    );
+    insert_active_public_lane_validator_for_test(
+        &restored,
+        current_owner,
+        &validator_before.validator,
+        &keypair,
+        1_000_000,
+    );
+    assert_eq!(
+        nexus_staking_authority_lane_at_height(current_owner, &all_admin, 0),
+        None,
+        "the restored intermediate configuration has no staking owner"
+    );
+    let mut reenabled = all_admin;
+    reenabled.staking.restricted_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+    let mut restored = restored;
+    let err = restored
+        .set_nexus(reenabled)
+        .expect_err("re-enabling a different owner must reject legacy live state");
+    assert!(matches!(
+        err,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == current_owner
+                && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+    ));
+    let restored_nexus = restored.nexus_snapshot();
+    assert_eq!(
+        restored_nexus.staking.restricted_validator_mode,
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged,
+        "rejected owner re-enable must preserve the no-owner configuration"
+    );
+}
+
+#[test]
+fn set_nexus_allows_enabled_to_disabled_single_lane_with_live_stake() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        })
+        .expect("enable the default single-lane Nexus geometry");
+    let (validator, keypair) = bls_account_in("validators");
+    insert_active_public_lane_validator_for_test(
+        &state,
+        LaneId::SINGLE,
+        &validator,
+        &keypair,
+        1_000_000,
+    );
+    let validator_before = state
+        .world
+        .public_lane_validators
+        .view()
+        .get(&(LaneId::SINGLE, validator.clone()))
+        .expect("live single-lane validator")
+        .clone();
+
+    let mut disabled = iroha_config::parameters::actual::Nexus::default();
+    disabled.enabled = false;
+    state
+        .set_nexus(disabled)
+        .expect("disabled mode retains exact SINGLE/UNIVERSAL staking ownership");
+
+    assert!(!state.nexus_snapshot().enabled);
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        })
+        .expect("re-enabling Nexus is safe while SINGLE remains the staking owner");
+    assert!(state.nexus_snapshot().enabled);
+    let world = state.world.view();
+    assert_eq!(
+        world
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, validator)),
+        Some(&validator_before)
+    );
+}
+
+#[test]
+fn set_nexus_rejects_disabled_live_single_reassigned_on_enable() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let mut disabled = iroha_config::parameters::actual::Nexus::default();
+    disabled.enabled = false;
+    state
+        .set_nexus(disabled)
+        .expect("start from disabled exact-lane ownership");
+    let (validator, keypair) = bls_account_in("validators");
+    insert_active_public_lane_validator_for_test(
+        &state,
+        LaneId::SINGLE,
+        &validator,
+        &keypair,
+        1_000_000,
+    );
+    let mut enabled = iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        lane_catalog: LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "enabled-staking-owner".to_owned(),
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("enabled shared-dataspace catalog"),
+        ..Default::default()
+    };
+    enabled.staking.public_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    enabled.staking.restricted_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::StakeElected;
+
+    let err = state
+        .set_nexus(enabled)
+        .expect_err("enabling a different owner must not strand disabled SINGLE stake");
+    assert!(matches!(
+        err,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == LaneId::SINGLE
+                && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+    ));
+    assert!(!state.nexus_snapshot().enabled);
+    let world = state.world.view();
+    assert!(
+        world
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, validator))
+            .is_some(),
+        "rejected enablement must preserve the disabled exact-lane projection"
+    );
+}
+
+#[test]
 fn authoritative_lane_peers_for_stake_elected_lane_require_present_live_peer() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -39051,6 +39876,47 @@ fn authoritative_lane_peers_for_autoscale_elastic_lane_survive_live_peer_removal
             .iter()
             .any(|(_, record)| &record.public_key == removed_peer.public_key()),
         "test fixture must retain the removed peer's otherwise-live consensus key"
+    );
+}
+
+#[test]
+fn autoscale_lane_creation_ignores_conflicting_existing_elastic_manifest() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), kura, query_handle);
+    let existing_lane = LaneId::new(1);
+    let prospective_lane = LaneId::new(2);
+    install_autoscale_elastic_lanes_for_test(
+        &state,
+        vec![
+            autoscale_elastic_catalog_lane_for_test(existing_lane, 1),
+            autoscale_elastic_catalog_lane_for_test(prospective_lane, 1),
+        ],
+    );
+    seed_latest_lane_authority_height_for_test(&state, 1);
+
+    let (static_validators, static_keypairs) = bls_accounts_in("validators", 4);
+    let (elastic_validators, elastic_keypairs) = bls_accounts_in("validators", 4);
+    let mut live_keypairs = static_keypairs.clone();
+    live_keypairs.extend(elastic_keypairs);
+    seed_consensus_keys_with_pops(&state, &live_keypairs);
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL, static_validators),
+            (existing_lane, DataSpaceId::UNIVERSAL, elastic_validators),
+        ],
+    );
+
+    let committee = repin_autoscale_lane_from_current_sources_for_test(&state, prospective_lane, 1);
+    let mut expected = static_keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(
+        committee, expected,
+        "an existing elastic manifest must neither seed nor block a later autoscale pin"
     );
 }
 
@@ -40104,6 +40970,22 @@ fn authoritative_lane_validators_ignore_stale_stake_records_for_unknown_lane() {
             .is_empty()
     );
     assert!(state.authoritative_lane_peer_ids(stale_lane).is_empty());
+    assert!(
+        state
+            .manifest_lane_validator_bindings(LaneId::SINGLE)
+            .is_empty(),
+        "a stale stake row must not synthesize manifest bindings for an active sibling"
+    );
+    assert!(
+        state
+            .authoritative_lane_validator_accounts(LaneId::SINGLE)
+            .is_empty(),
+        "an unknown lane's stake row must not contaminate active account authority"
+    );
+    assert!(
+        state.authoritative_lane_peer_ids(LaneId::SINGLE).is_empty(),
+        "an unknown lane's stake row must not contaminate active peer authority"
+    );
 }
 
 #[test]
@@ -40192,6 +41074,22 @@ fn authoritative_lane_validators_ignore_stale_manifest_for_unknown_lane() {
             .is_empty()
     );
     assert!(state.authoritative_lane_peer_ids(stale_lane).is_empty());
+    assert!(
+        state
+            .manifest_lane_validator_bindings(LaneId::SINGLE)
+            .is_empty(),
+        "a status-only manifest for an unknown lane must not project into an active sibling"
+    );
+    assert!(
+        state
+            .authoritative_lane_validator_accounts(LaneId::SINGLE)
+            .is_empty(),
+        "an unknown lane's roster must not contaminate active account authority"
+    );
+    assert!(
+        state.authoritative_lane_peer_ids(LaneId::SINGLE).is_empty(),
+        "an unknown lane's roster must not contaminate active peer authority"
+    );
 }
 
 #[test]
@@ -40245,6 +41143,39 @@ fn authoritative_lane_validators_ignore_manifest_for_rebound_dataspace() {
             .is_empty()
     );
     assert!(state.authoritative_lane_peer_ids(lane_id).is_empty());
+}
+
+#[test]
+fn same_dataspace_authority_rejects_rebound_active_sibling_manifest() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    configure_two_universal_authority_lanes_for_test(&mut state, LaneVisibility::Restricted);
+
+    let target_lane = LaneId::SINGLE;
+    let sibling_lane = LaneId::new(1);
+    let (validator, keypair) = bls_account_in("validators");
+    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (target_lane, DataSpaceId::UNIVERSAL, vec![validator]),
+            (sibling_lane, DataSpaceId::new(9), Vec::new()),
+        ],
+    );
+
+    assert!(
+        state
+            .manifest_lane_validator_bindings(target_lane)
+            .is_empty(),
+        "an active sibling rebound outside its catalog dataspace must seal manifest projection"
+    );
+    assert!(
+        state
+            .authoritative_lane_validator_accounts(target_lane)
+            .is_empty()
+    );
+    assert!(state.authoritative_lane_peer_ids(target_lane).is_empty());
 }
 
 #[test]

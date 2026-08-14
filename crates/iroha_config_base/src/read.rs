@@ -5,6 +5,7 @@ use std::{
     convert::identity,
     error::Error as StdError,
     fmt::{Debug, Write as _},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -24,6 +25,11 @@ use crate::{
 };
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+// Count `extends` edges below the root source, whose depth is zero.
+const MAX_EXTENDS_DEPTH: usize = 64;
+// Bound total source expansion separately from depth: an acyclic branching DAG
+// can otherwise duplicate the same descendant exponentially.
+const MAX_EXTENDS_SOURCES: usize = 4_096;
 
 fn escape_json_string_plain(s: &str, out: &mut String) {
     out.push('"');
@@ -165,6 +171,22 @@ struct JsonValueError {
     message: String,
 }
 
+#[derive(Error, Debug)]
+enum ExtendsResolutionError {
+    #[error("cyclic `extends` chain re-enters `{}`", path.display())]
+    Cycle { path: PathBuf },
+    #[error(
+        "`extends` chain exceeds the maximum supported depth of {maximum} at `{}`",
+        path.display()
+    )]
+    DepthLimit { path: PathBuf, maximum: usize },
+    #[error(
+        "expanded `extends` graph exceeds the maximum supported source count of {maximum} at `{}`",
+        path.display()
+    )]
+    ExpansionLimit { path: PathBuf, maximum: usize },
+}
+
 fn normalize_json_error_message(raw: &str) -> String {
     raw.strip_prefix("JSON error: ").unwrap_or(raw).to_string()
 }
@@ -290,45 +312,63 @@ impl ConfigReader {
     ///
     /// # Errors
     ///
-    /// If files reading error occurs
+    /// If a file cannot be read, an `extends` value is invalid, the inheritance
+    /// chain is cyclic, the chain exceeds the supported nesting depth, or its
+    /// expanded source count exceeds the supported budget.
     pub fn read_toml_with_extends<P: AsRef<Path>>(mut self, path: P) -> Result<Self, Error> {
         #[derive(Debug)]
-        struct StackEntry {
-            path: PathBuf,
-            depth: u8,
-            parent: Option<PathBuf>,
-            source: Option<TomlSource>,
+        enum StackEntry {
+            Load {
+                path: PathBuf,
+                depth: usize,
+                parent: Option<PathBuf>,
+                ancestors: Vec<PathBuf>,
+            },
+            Emit(TomlSource),
         }
 
         let result = (|| -> Result<(), Error> {
-            let mut stack = vec![StackEntry {
+            let mut stack = vec![StackEntry::Load {
                 path: path.as_ref().to_path_buf(),
                 depth: 0,
                 parent: None,
-                source: None,
+                ancestors: Vec::new(),
             }];
+            let mut scheduled_sources = 1_usize;
 
-            while let Some(StackEntry {
-                path,
-                depth,
-                parent,
-                mut source,
-            }) = stack.pop()
-            {
-                let mut src = match source.take() {
-                    Some(src) => src,
-                    None => TomlSource::from_file(&path)
-                        .attach_with(|| attach::FilePath::new(path.clone()))
-                        .change_context(Error::ReadFile)
-                        .map_err(|err| match &parent {
-                            Some(parent_path) => err.attach(attach::ExtendsChain::new(
-                                parent_path.clone(),
-                                path.clone(),
-                                depth,
-                            )),
-                            None => err,
-                        })?,
+            while let Some(entry) = stack.pop() {
+                let (path, depth, parent, ancestors) = match entry {
+                    StackEntry::Load {
+                        path,
+                        depth,
+                        parent,
+                        ancestors,
+                    } => (path, depth, parent, ancestors),
+                    StackEntry::Emit(source) => {
+                        self.sources.push(source);
+                        continue;
+                    }
                 };
+
+                let mut src = TomlSource::from_file(&path)
+                    .attach_with(|| attach::FilePath::new(path.clone()))
+                    .change_context(Error::ReadFile)
+                    .map_err(|err| match &parent {
+                        Some(parent_path) => err.attach(attach::ExtendsChain::new(
+                            parent_path.clone(),
+                            path.clone(),
+                            u8::try_from(depth).unwrap_or(u8::MAX),
+                        )),
+                        None => err,
+                    })?;
+                let canonical_path = fs::canonicalize(&path)
+                    .attach_with(|| attach::FilePath::new(path.clone()))
+                    .change_context(Error::CannotExtend)?;
+                if ancestors.contains(&canonical_path) {
+                    return Err(Report::new(ExtendsResolutionError::Cycle { path })
+                        .change_context(Error::CannotExtend)
+                        .expand());
+                }
 
                 let table = src.table_mut();
 
@@ -340,12 +380,10 @@ impl ConfigReader {
                         .change_context(Error::InvalidExtends)?;
                     log::trace!("found `extends`: {parsed:?}");
 
-                    stack.push(StackEntry {
-                        path: path.clone(),
-                        depth,
-                        parent: parent.clone(),
-                        source: Some(src),
-                    });
+                    stack.push(StackEntry::Emit(src));
+
+                    let mut child_ancestors = ancestors;
+                    child_ancestors.push(canonical_path);
 
                     let mut paths = parsed.iter().collect::<Vec<_>>();
                     paths.reverse();
@@ -354,11 +392,38 @@ impl ConfigReader {
                             .parent()
                             .expect("it cannot be root or empty")
                             .join(extends_path);
-                        stack.push(StackEntry {
+                        let Some(child_depth) = depth
+                            .checked_add(1)
+                            .filter(|child_depth| *child_depth <= MAX_EXTENDS_DEPTH)
+                        else {
+                            return Err(Report::new(ExtendsResolutionError::DepthLimit {
+                                path: full_path,
+                                maximum: MAX_EXTENDS_DEPTH,
+                            })
+                            .change_context(Error::CannotExtend)
+                            .expand());
+                        };
+                        scheduled_sources = scheduled_sources.checked_add(1).ok_or_else(|| {
+                            Report::new(ExtendsResolutionError::ExpansionLimit {
+                                path: full_path.clone(),
+                                maximum: MAX_EXTENDS_SOURCES,
+                            })
+                            .change_context(Error::CannotExtend)
+                            .expand()
+                        })?;
+                        if scheduled_sources > MAX_EXTENDS_SOURCES {
+                            return Err(Report::new(ExtendsResolutionError::ExpansionLimit {
+                                path: full_path,
+                                maximum: MAX_EXTENDS_SOURCES,
+                            })
+                            .change_context(Error::CannotExtend)
+                            .expand());
+                        }
+                        stack.push(StackEntry::Load {
                             path: full_path,
-                            depth: depth + 1,
+                            depth: child_depth,
                             parent: Some(path.clone()),
-                            source: None,
+                            ancestors: child_ancestors.clone(),
                         });
                     }
 

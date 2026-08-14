@@ -72,18 +72,30 @@ fn record_block_commit(state_block: &mut StateBlock<'_>, block: &crate::block::C
 }
 
 fn setup_state() -> State {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(World::default(), kura, query_handle);
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
+    let mut nexus = iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        ..Default::default()
+    };
     nexus.lane_catalog = staking_test_lane_catalog();
-    nexus.lane_config =
-        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-    state
-        .set_nexus(nexus)
-        .expect("staking test lane catalog should be valid");
-    state
+    nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| iroha_data_model::nexus::DataSpaceMetadata {
+                id: lane.dataspace_id,
+                alias: if lane.dataspace_id == DataSpaceId::UNIVERSAL {
+                    "universal".to_owned()
+                } else {
+                    format!("staking-test-dataspace-{}", lane.dataspace_id.as_u64())
+                },
+                description: None,
+                fault_tolerance: 1,
+            })
+            .collect(),
+    )
+    .expect("staking test dataspace catalog should match its lanes");
+    State::new_with_nexus_for_testing(World::default(), nexus, LiveQueryStore::start_test())
 }
 
 fn staking_test_lane_catalog() -> LaneCatalog {
@@ -93,7 +105,11 @@ fn staking_test_lane_catalog() -> LaneCatalog {
             let lane_id = LaneId::new(id);
             LaneConfig {
                 id: lane_id,
-                dataspace_id: DataSpaceId::UNIVERSAL,
+                dataspace_id: if lane_id == LaneId::SINGLE {
+                    DataSpaceId::UNIVERSAL
+                } else {
+                    DataSpaceId::new(u64::from(id))
+                },
                 alias: if lane_id == LaneId::SINGLE {
                     "default".to_string()
                 } else {

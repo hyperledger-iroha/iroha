@@ -1,6 +1,5 @@
 use crate::sumeragi::v2_lifecycle_coordinator::{
-    reviewed_lifecycle_ledger_source_for_test,
-    reviewed_lifecycle_work_registry_source_for_test,
+    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
 };
 
 #[test]
@@ -1068,6 +1067,68 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         .recovered_decision_fetch_row_summary_for_test()
         .expect("missing Decision appends one exact Fetch row");
     assert_eq!(first_summary.0, first_summary.1);
+    let mixed_sign_ordinal = first.add_recovered_next_vote_completion_for_test(0xCD);
+    assert!(
+        mixed_sign_ordinal > first_summary.0,
+        "the later Sign must win by remaining-stage rank rather than ordinal"
+    );
+    {
+        let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
+            .expect("verify the exact recovered Fetch executor context");
+        let (adapter, startup) = SumeragiV2Adapter::open(
+            storage
+                .path()
+                .join("decision-fetch-composite-sign-runtime.wal"),
+            runtime_verified,
+            Some(0),
+            reducer::Generation::new(1),
+            [0xCB; 32],
+            fingerprints(),
+            deferred_admission_ordinals(),
+        )
+        .expect("open an exact recovered Fetch executor adapter");
+        assert!(startup.is_empty());
+        let runtime = super::super::v2_runtime::SerializedV2Runtime::new(
+            adapter,
+            startup,
+            Instant::now(),
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+        )
+        .expect("wrap the recovered Fetch executor adapter")
+        .0;
+        let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+        let (mut services, _) = super::super::v2_worker::tests::fixture();
+        let (mut executor, planner_io) = first.bind_body_store_to_recovered_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            2,
+        );
+        super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
+        assert_eq!(
+            first
+                .dispatch_recovered_completion_for_test(&services, &mut executor, 0)
+                .expect("rank the genuine WAL-backed Sign beside recovered Fetch"),
+            super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::SignQueued {
+                ordinal: mixed_sign_ordinal,
+            }
+        );
+        assert!(
+            first.recovered_completion_selection_is_exact_for_test(
+                mixed_sign_ordinal,
+                first_summary.0,
+            ),
+            "the lower-rank later Sign is claimed while the higher-rank Fetch remains Ready"
+        );
+        assert!(!output_guard.restart_required());
+        // The extra Sign exists only in this closed scheduler fixture. Model
+        // the cold boundary explicitly before discarding its claimed volatile
+        // owner; the unchanged Ledger then reopens the durable Fetch alone.
+        output_guard.close_admission_for_restart();
+        assert!(output_guard.restart_required());
+        planner_io.detach(&mut services);
+    }
     let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
     let first_frame = std::fs::read(&ledger_path).expect("read Decision Fetch LedgerV1");
     #[cfg(unix)]
@@ -1081,7 +1142,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     drop(first);
 
     crate::sumeragi::status::clear_v2_status();
-    let verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
+    let verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
         .expect("reverify Decision Fetch context");
     let reopened = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
         safety.path().join("authenticated-fifo-safety.wal"),
@@ -1129,6 +1190,57 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             first_inode,
             "exact Decision Fetch coalesce validates without replacing the inode"
         );
+    }
+    {
+        let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
+            .expect("verify the clean recovered Fetch executor context");
+        let (adapter, startup) = SumeragiV2Adapter::open(
+            storage
+                .path()
+                .join("decision-fetch-composite-fetch-runtime.wal"),
+            runtime_verified,
+            Some(0),
+            reducer::Generation::new(2),
+            [0xCC; 32],
+            fingerprints(),
+            deferred_admission_ordinals(),
+        )
+        .expect("open a clean recovered Fetch executor adapter");
+        assert!(startup.is_empty());
+        let runtime = super::super::v2_runtime::SerializedV2Runtime::new(
+            adapter,
+            startup,
+            Instant::now(),
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+        )
+        .expect("wrap the clean recovered Fetch executor adapter")
+        .0;
+        let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+        let (mut services, _) = super::super::v2_worker::tests::fixture();
+        let (mut executor, planner_io) = reopened
+            .bind_body_store_to_recovered_completion_io_for_test(
+                &mut services,
+                runtime,
+                Arc::clone(&output_guard),
+                2,
+            );
+        super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
+        assert_eq!(
+            reopened
+                .dispatch_recovered_completion_for_test(&services, &mut executor, 0)
+                .expect("dispatch the genuine WAL-backed recovered Fetch"),
+            super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::FetchDispatched {
+                ordinal: first_summary.0,
+            }
+        );
+        assert!(
+            services
+                .has_pending_exact_output()
+                .expect("inspect the recovered Fetch exact-output owner")
+        );
+        assert!(!output_guard.restart_required());
+        planner_io.detach(&mut services);
     }
     assert_eq!(
         crate::sumeragi::status::v2_status()
@@ -1978,6 +2090,179 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         RecoveredWalStartupAuthorityV1::DecisionFetch(_)
     ));
 
+    let pending_directory = TempDir::new().expect("temporary pending Kura Decision Fetch WAL");
+    let expected_pending = crate::sumeragi::v2_recovery::PendingKuraApply::for_test(
+        context.id(),
+        context.height,
+        decision.subject.block_hash,
+    );
+    let pending = write_and_reopen_authenticated_wal_startup(
+        &pending_directory,
+        &context,
+        &proofs,
+        0,
+        [0xC8; 32],
+        vec![WalRecordV2::Decision(decision.clone())],
+    )
+    .bind_pending_kura_apply(expected_pending)
+    .unwrap_or_else(|(error, _)| panic!("bind exact pending Kura tip: {error}"))
+    .authenticate_final_wal_startup_authority()
+    .unwrap_or_else(|error| panic!("authenticate pending Kura Decision Fetch: {error}"));
+    assert!(pending.is_storage_only_for_test());
+    assert_eq!(pending.expected_for_test(), expected_pending);
+
+    let mismatched_pending_directory =
+        TempDir::new().expect("temporary mismatched pending Kura Decision Fetch WAL");
+    let mismatched_pending = crate::sumeragi::v2_recovery::PendingKuraApply::for_test(
+        context.id(),
+        context.height,
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign pending Kura block")),
+    );
+    let Err(mismatched) = write_and_reopen_authenticated_wal_startup(
+        &mismatched_pending_directory,
+        &context,
+        &proofs,
+        0,
+        [0xC8; 32],
+        vec![WalRecordV2::Decision(decision.clone())],
+    )
+    .bind_pending_kura_apply(mismatched_pending)
+    .unwrap_or_else(|(error, _)| panic!("bind same-height pending Kura tip: {error}"))
+    .authenticate_final_wal_startup_authority() else {
+        panic!("a same-height foreign Kura block must fail before owner launch")
+    };
+    assert!(matches!(
+        mismatched,
+        AdapterError::RecoveredPendingKuraApplyMismatch
+    ));
+    let mut runtime_startup = pending.into_runtime_startup_for_test();
+    let ProductionLifecycleAdapterStartupStateV1::Recovered {
+        pending_kura_apply,
+        leader_wire_launch_prepared,
+        ..
+    } = &mut runtime_startup.state
+    else {
+        panic!("pending Kura startup must remain a recovered adapter")
+    };
+    assert!(pending_kura_apply.is_some());
+    *leader_wire_launch_prepared = true;
+    let (mut runtime, prepared, local_proposal_attempt) = runtime_startup
+        .into_serialized_runtime(
+            Instant::now(),
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("move pending Kura Fetch and its lifecycle sidecar into runtime");
+    assert!(local_proposal_attempt.is_none());
+    let prepared = prepared.expect("runtime returns one opaque pending Kura replay seal");
+    assert_eq!(prepared.expected_for_test(), expected_pending);
+    assert!(prepared.is_exact_for_test());
+    assert_eq!(
+        runtime
+            .take_effect_ownership(1)
+            .expect("runtime retains the exact pending Kura lifecycle sidecar")
+            .len(),
+        1
+    );
+    drop(prepared);
+    drop(runtime);
+
+    let install_pending_directory =
+        TempDir::new().expect("temporary pending Kura install-failure WAL");
+    let install_pending = write_and_reopen_authenticated_wal_startup(
+        &install_pending_directory,
+        &context,
+        &proofs,
+        0,
+        [0xC8; 32],
+        vec![WalRecordV2::Decision(decision.clone())],
+    )
+    .bind_pending_kura_apply(expected_pending)
+    .unwrap_or_else(|(error, _)| panic!("bind pending Kura install fixture: {error}"))
+    .authenticate_final_wal_startup_authority()
+    .unwrap_or_else(|error| panic!("authenticate pending Kura install fixture: {error}"));
+    assert!(install_pending.is_storage_only_for_test());
+    let mut install_runtime_startup = install_pending.into_runtime_startup_for_test();
+    let ProductionLifecycleAdapterStartupStateV1::Recovered {
+        leader_wire_launch_prepared,
+        ..
+    } = &mut install_runtime_startup.state
+    else {
+        panic!("pending Kura install fixture must remain recovered")
+    };
+    *leader_wire_launch_prepared = true;
+    let (runtime, prepared, local_proposal_attempt) = install_runtime_startup
+        .into_serialized_runtime(
+            Instant::now(),
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("move the install fixture into runtime");
+    assert!(local_proposal_attempt.is_none());
+    let prepared = prepared.expect("install fixture returns its pending replay seal");
+    let mut executor = super::super::v2_effects::V2EffectExecutor::with_runtime(
+        runtime,
+        BTreeMap::new(),
+        context.clone(),
+        context.roster[0].validator.clone(),
+        Some(0),
+        super::super::v2_effects::EffectQueueConfig::default(),
+    )
+    .expect("open a pending Kura executor without the required recovered body");
+    let (mut services, _planner_io) = super::super::v2_worker::tests::fixture();
+    let install_result = prepared.install(&mut executor, &mut services);
+    assert!(matches!(
+        install_result,
+        Err(super::super::v2_effects::EffectExecutorError::PendingApplyRecoveryMismatch(_))
+    ));
+
+    let empty_pending_directory =
+        TempDir::new().expect("temporary pending Kura startup without a Decision");
+    let empty_pending = write_and_reopen_authenticated_wal_startup(
+        &empty_pending_directory,
+        &context,
+        &proofs,
+        0,
+        [0xC8; 32],
+        Vec::new(),
+    )
+    .bind_pending_kura_apply(expected_pending)
+    .unwrap_or_else(|(error, _)| panic!("bind empty pending Kura startup: {error}"))
+    .authenticate_final_wal_startup_authority();
+    let Err(empty_error) = empty_pending else {
+        panic!("pending Kura startup without a Decision Fetch must fail closed")
+    };
+    assert!(matches!(
+        empty_error,
+        AdapterError::RecoveredPendingKuraApplyMismatch
+    ));
+
+    let foreign_pending_directory =
+        TempDir::new().expect("temporary foreign pending Kura Decision Fetch WAL");
+    let foreign_pending = crate::sumeragi::v2_recovery::PendingKuraApply::for_test(
+        context.id(),
+        context.height + 1,
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign pending Kura block")),
+    );
+    let foreign_startup = write_and_reopen_authenticated_wal_startup(
+        &foreign_pending_directory,
+        &context,
+        &proofs,
+        0,
+        [0xC8; 32],
+        vec![WalRecordV2::Decision(decision.clone())],
+    );
+    let Err((error, retained)) = foreign_startup.bind_pending_kura_apply(foreign_pending) else {
+        panic!("a foreign pending Kura height must not bind recovered startup")
+    };
+    assert!(matches!(
+        error,
+        AdapterError::RecoveredPendingKuraApplyMismatch
+    ));
+    assert_eq!(retained.effects.len(), 1);
+
     let manifest_directory = TempDir::new().expect("temporary mutated-manifest WAL");
     let mut retained = write_and_reopen_authenticated_wal_startup(
         &manifest_directory,
@@ -2109,6 +2394,38 @@ fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store(
     let timeout_safety = TempDir::new().expect("temporary TimeoutIntent classifier WAL");
     persist_proposal_intent_for_control_recovery(&proposal_safety, 0xC3);
     persist_timeout_intent_for_control_recovery(&timeout_safety);
+
+    let authenticated_proposal = open_recovered_leader_startup_test(&proposal_safety)
+        .expect("open exact ProposalIntent startup for local-attempt ownership")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| {
+            panic!("authenticate exact ProposalIntent startup: {error}")
+        });
+    let RecoveredWalStartupAuthorityV1::ControlSign(control) = &authenticated_proposal.authority
+    else {
+        panic!("ProposalIntent must retain one exact control Sign")
+    };
+    let recovered_attempt = RecoveredLifecycleLocalProposalAttemptV1::from_control(control)
+        .expect("ProposalIntent control Sign mints one opaque local-attempt owner");
+    let directive = authenticated_proposal
+        .adapter
+        .local_proposal_directive()
+        .expect("read exact recovered Proposal directive");
+    assert!(recovered_attempt.exactly_matches_directive(directive));
+    drop(authenticated_proposal);
+
+    let authenticated_timeout = open_recovered_startup_test(&timeout_safety)
+        .expect("open exact TimeoutIntent startup for local-attempt exclusion")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| {
+            panic!("authenticate exact TimeoutIntent startup: {error}")
+        });
+    let RecoveredWalStartupAuthorityV1::ControlSign(control) = &authenticated_timeout.authority
+    else {
+        panic!("TimeoutIntent must retain one exact control Sign")
+    };
+    assert!(RecoveredLifecycleLocalProposalAttemptV1::from_control(control).is_none());
+    drop(authenticated_timeout);
 
     let mut proposal =
         open_recovered_leader_startup_test(&proposal_safety).expect("open ProposalIntent startup");
@@ -2363,15 +2680,11 @@ fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
     let factory_inputs = canonical_factory
         .find("factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1")
         .expect("consume the adapter-bound execution/storage seal");
-    assert!(canonical_factory.contains(
-        "body_store: super::v2_body_store::QuarantinedV2BodyStore"
-    ));
-    assert!(!canonical_factory.contains(
-        "body_store: super::v2_body_store::V2BodyStore"
-    ));
-    assert!(!canonical_factory.contains(
-        "body_store: super::v2_body_store::RevalidatedV2BodyStore"
-    ));
+    assert!(canonical_factory.contains("body_store: super::v2_body_store::QuarantinedV2BodyStore"));
+    assert!(!canonical_factory.contains("body_store: super::v2_body_store::V2BodyStore"));
+    assert!(
+        !canonical_factory.contains("body_store: super::v2_body_store::RevalidatedV2BodyStore")
+    );
     let residual = canonical_factory
         .find("if !self.effects.is_empty()")
         .expect("reject residual effects before marker replay");

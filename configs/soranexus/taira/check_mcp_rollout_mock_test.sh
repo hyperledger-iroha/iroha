@@ -368,7 +368,44 @@ for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
         "manifest_path": manifest_path,
     })
 
-print(json.dumps({
+routing_rule_tuples = [
+    (3, 10, "account", "*@dpn"),
+    (4, 6647857470246403404, "account", "*@wonderland.is"),
+    (5, 8477022798449861195, "account", "*@boi.is2"),
+    (5, 8477022798449861195, "account", "*@leumi.is2"),
+    (5, 8477022798449861195, "account", "*@hapoalim.is2"),
+    (5, 8477022798449861195, "account", "*@discount.is2"),
+    (5, 8477022798449861195, "account", "*@mizrahi.is2"),
+    (5, 8477022798449861195, "account", "*@fibi.is2"),
+    (5, 8477022798449861195, "account", "*@onezero.is2"),
+    (5, 8477022798449861195, "account", "*@jerusalem.is2"),
+    (6, 20, "account", "*@cbsi"),
+    (6, 20, "account", "*@pob.cbsi"),
+    (6, 20, "account", "*@bred.cbsi"),
+    (6, 20, "account", "*@anz.cbsi"),
+    (6, 20, "account", "*@bsp.cbsi"),
+    (6, 20, "account", "*@m-selen.cbsi"),
+    (6, 20, "account", "*@ezipei.cbsi"),
+    (1, 0, "instruction", "governance"),
+    (2, 0, "instruction", "smartcontract::deploy"),
+]
+routing_rules = [
+    {
+        "lane": lane_id,
+        "dataspace_id": dataspace_id,
+        "matcher": {
+            matcher_kind: matcher_value,
+            "description": f"canonical Taira routing rule {position}",
+        },
+    }
+    for position, (lane_id, dataspace_id, matcher_kind, matcher_value) in enumerate(
+        routing_rule_tuples
+    )
+]
+if scenario == "fleet_wrong_routing_matcher":
+    routing_rules[1]["matcher"]["account"] = "*@is"
+
+payload = {
     "build": {
         "dpn_validator_release_commit": "d" * 40,
         "git_commit_sha": "490dacc287f00d490dacc287f00d490dacc287f0",
@@ -379,7 +416,18 @@ print(json.dumps({
     "teu_lane_commit": teu_lane_commit,
     "teu_dataspace_backlog": [{"backlog": 0}],
     "dataspace_catalog": dataspace_catalog,
-}, separators=(",", ":")))
+}
+if scenario == "fleet_missing_routing_policy":
+    payload["nexus"] = {}
+else:
+    payload["nexus"] = {
+        "routing_policy": {
+            "default_lane": 0,
+            "default_dataspace": 0,
+            "rules": routing_rules,
+        }
+    }
+print(json.dumps(payload, separators=(",", ":")))
 PY
 )"
 elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == */v1/sumeragi/status ]]; then
@@ -525,16 +573,80 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/status" ]]; then
     status="503"
     content_type="text/plain"
     body='service unavailable'
-  elif [[ "$scenario" == "status_build_sha_missing" ]]; then
-    body='{"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
-  elif [[ "$scenario" == "status_build_sha_too_short" ]]; then
-    body='{"build":{"dpn_validator_release_commit":"dddddddddddddddddddddddddddddddddddddddd","git_commit_sha":"490dac"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
-  elif [[ "$scenario" == "status_build_sha_mismatch" ]]; then
-    body='{"build":{"dpn_validator_release_commit":"dddddddddddddddddddddddddddddddddddddddd","git_commit_sha":"94dcbf7c28"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
-  elif [[ "$scenario" == "status_dpn_commit_mismatch" ]]; then
-    body='{"build":{"dpn_validator_release_commit":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","git_commit_sha":"490dacc287f00d490dacc287f00d490dacc287f0"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
   else
-    body='{"build":{"dpn_validator_release_commit":"dddddddddddddddddddddddddddddddddddddddd","git_commit_sha":"490dacc287f00d490dacc287f00d490dacc287f0"},"peers":4,"blocks":707,"queue_size":0,"teu_dataspace_backlog":[{"backlog":0}]}'
+    body="$(python3 - "$scenario" "$after_ping" <<'PY'
+import json
+import sys
+
+scenario = sys.argv[1]
+after_ping = sys.argv[2] == "1"
+routing_rule_tuples = [
+    (3, 10, "account", "*@dpn"),
+    (4, 6647857470246403404, "account", "*@wonderland.is"),
+    (5, 8477022798449861195, "account", "*@boi.is2"),
+    (5, 8477022798449861195, "account", "*@leumi.is2"),
+    (5, 8477022798449861195, "account", "*@hapoalim.is2"),
+    (5, 8477022798449861195, "account", "*@discount.is2"),
+    (5, 8477022798449861195, "account", "*@mizrahi.is2"),
+    (5, 8477022798449861195, "account", "*@fibi.is2"),
+    (5, 8477022798449861195, "account", "*@onezero.is2"),
+    (5, 8477022798449861195, "account", "*@jerusalem.is2"),
+    (6, 20, "account", "*@cbsi"),
+    (6, 20, "account", "*@pob.cbsi"),
+    (6, 20, "account", "*@bred.cbsi"),
+    (6, 20, "account", "*@anz.cbsi"),
+    (6, 20, "account", "*@bsp.cbsi"),
+    (6, 20, "account", "*@m-selen.cbsi"),
+    (6, 20, "account", "*@ezipei.cbsi"),
+    (1, 0, "instruction", "governance"),
+    (2, 0, "instruction", "smartcontract::deploy"),
+]
+routing_rules = [
+    {
+        "lane": lane_id,
+        "dataspace_id": dataspace_id,
+        "matcher": {
+            matcher_kind: matcher_value,
+            "description": f"canonical Taira routing rule {position}",
+        },
+    }
+    for position, (lane_id, dataspace_id, matcher_kind, matcher_value) in enumerate(
+        routing_rule_tuples
+    )
+]
+if scenario == "public_wrong_routing_matcher" or (
+    scenario == "post_canary_wrong_routing_matcher" and after_ping
+):
+    routing_rules[1]["matcher"]["account"] = "*@is"
+
+payload = {
+    "build": {
+        "dpn_validator_release_commit": "d" * 40,
+        "git_commit_sha": "490dacc287f00d490dacc287f00d490dacc287f0",
+    },
+    "peers": 4,
+    "blocks": 707,
+    "queue_size": 0,
+    "teu_dataspace_backlog": [{"backlog": 0}],
+    "nexus": {
+        "routing_policy": {
+            "default_lane": 0,
+            "default_dataspace": 0,
+            "rules": routing_rules,
+        }
+    },
+}
+if scenario == "status_build_sha_missing":
+    payload.pop("build")
+elif scenario == "status_build_sha_too_short":
+    payload["build"]["git_commit_sha"] = "490dac"
+elif scenario == "status_build_sha_mismatch":
+    payload["build"]["git_commit_sha"] = "94dcbf7c28"
+elif scenario == "status_dpn_commit_mismatch":
+    payload["build"]["dpn_validator_release_commit"] = "e" * 40
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)"
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
   body='{"protocol_version":4,"restart_required":false,"node_fingerprint":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","build_fingerprint":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","config_fingerprint":"hash:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","height_context_id":["hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"hash:EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE","payload_hash":"hash:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"view_change_install_total":2,"busy_deferral_total":0,"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"retained_bytes":128,"max_retained_bytes":8192,"oldest_queued_age_ms":5,"saturated_by_count":false,"saturated_by_bytes":false,"saturated_by_age":false}}}'
@@ -639,7 +751,7 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
         echo "ping failed while public ingress was degrading"
         exit 1
         ;;
-      sumeragi_highest_qc_behind_commit|sumeragi_locked_qc_behind_commit|sumeragi_idle_high_view_missing_qc|post_canary_sumeragi_missing_validator_set)
+      sumeragi_highest_qc_behind_commit|sumeragi_locked_qc_behind_commit|sumeragi_idle_high_view_missing_qc|post_canary_sumeragi_missing_validator_set|post_canary_wrong_routing_matcher)
         echo "pong"
         exit 0
         ;;
@@ -872,12 +984,14 @@ run_case status_build_sha_missing '/status did not publish build.git_commit_sha'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not exactly match release commit 490dacc287f00d490dacc287f00d490dacc287f0' '' '490dacc'
 run_case status_dpn_commit_mismatch '/status DPN validator release commit eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee does not exactly match dddddddddddddddddddddddddddddddddddddddd'
+run_case public_wrong_routing_matcher 'expected exact ordered rule tuples'
 run_case sumeragi_missing_restart_required 'v2 status restart_required must be a boolean'
 run_case sumeragi_invalid_restart_required 'v2 status restart_required must be a boolean'
 run_case sumeragi_highest_qc_behind_commit 'durable CommitQC height does not match last_committed_height'
 run_case sumeragi_locked_qc_behind_commit 'durable CommitQC does not satisfy its frozen dual quorum'
 run_case sumeragi_idle_high_view_missing_qc 'v2 status omitted required last_commit_qc object'
 run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported invalid height_context.validator_count: 0'
+run_case post_canary_wrong_routing_matcher '/status still did not publish a healthy snapshot after the signed write canary' 'expected exact ordered rule tuples'
 run_case canonical_status_missing 'canonical pipeline transaction-status route should reject a missing hash failed with HTTP 404'
 run_case canonical_status_wrong_error "canonical pipeline transaction-status route should reject a missing hash returned error code 'bad_request'"
 run_case retired_status_alias_mounted 'retired transaction-status compatibility route must remain unmounted failed with HTTP 200'
@@ -891,6 +1005,8 @@ run_case fleet_invalid_dataspace_quorum "lane 'dpn' manifest quorum 2 is invalid
 run_case fleet_repeated_dataspace_roster "physical dataspaces 'is' and 'is2' reuse the same validator roster"
 run_case fleet_repeated_universal_roster "physical dataspaces 'universal' and 'dpn' reuse the same validator roster"
 run_case fleet_same_dataspace_roster_mismatch "lanes in physical dataspace 'universal' project different validator rosters or quorums"
+run_case fleet_missing_routing_policy '/status.nexus.routing_policy is not an object'
+run_case fleet_wrong_routing_matcher 'expected exact ordered rule tuples'
 run_case fleet_stale_commit_progress 'validator fleet did not advance a common committed height'
 run_case fleet_lagging_status_blocks '/status.blocks 706 does not match the durable committed height 707'
 run_case fleet_committed_hash_trailing_bytes 'durable committed subject omitted a canonical block hash'

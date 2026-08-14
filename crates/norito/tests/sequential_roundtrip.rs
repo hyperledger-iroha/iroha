@@ -18,6 +18,18 @@ fn vec_sequential_roundtrip() -> Result<(), Error> {
 }
 
 #[test]
+fn vec_sequential_rejects_impossible_declared_counts_without_panicking() {
+    for declared in [2, u64::MAX] {
+        let bytes = declared.to_le_bytes();
+        let result = std::panic::catch_unwind(|| deserialize_vec::<u8>(&bytes));
+        assert!(
+            matches!(&result, Ok(Err(Error::LengthMismatch))),
+            "declared count {declared} must return a typed error, got {result:?}"
+        );
+    }
+}
+
+#[test]
 fn hashmap_sequential_roundtrip_is_deterministic() -> Result<(), Error> {
     let mut map_a = HashMap::new();
     map_a.insert("alice".to_owned(), 10u32);

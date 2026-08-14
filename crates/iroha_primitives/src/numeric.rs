@@ -2872,8 +2872,13 @@ impl core::str::FromStr for Numeric {
         if trimmed.is_empty() {
             return Err(NumericError::Malformed);
         }
-        let negative = trimmed.starts_with('-');
-        let digits = trimmed.trim_start_matches(['+', '-']);
+        let (negative, digits) = if let Some(digits) = trimmed.strip_prefix('-') {
+            (true, digits)
+        } else if let Some(digits) = trimmed.strip_prefix('+') {
+            (false, digits)
+        } else {
+            (false, trimmed)
+        };
         let mut scale = 0u32;
         let mut mantissa_str = String::new();
         let mut seen_dot = false;
@@ -3432,6 +3437,17 @@ mod tests {
             oversized_and_nonremovable.parse::<Numeric>(),
             Err(NumericError::MantissaTooLarge)
         );
+    }
+
+    #[test]
+    fn numeric_parser_rejects_multiple_leading_signs() {
+        for malformed in ["++1", "+-1", "-+1", "--1"] {
+            assert_eq!(
+                malformed.parse::<Numeric>(),
+                Err(NumericError::Malformed),
+                "multiple leading signs must be rejected: {malformed}"
+            );
+        }
     }
 
     #[test]
