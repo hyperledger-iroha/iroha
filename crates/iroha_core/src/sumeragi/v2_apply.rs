@@ -4688,6 +4688,16 @@ impl V2ApplyService {
         if store_block {
             let staged_checkpoint =
                 crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+            #[cfg(test)]
+            assert_eq!(
+                staged_checkpoint,
+                Hash::new(
+                    staged_snapshot_bytes_for_test
+                        .as_ref()
+                        .expect("stored blocks retain staged canonical WSV bytes"),
+                ),
+                "staged streaming WSV hash must match its canonical semantic bytes",
+            );
             self.kura
                 .store_wsv_checkpoint(context.height, block_hash, staged_checkpoint)
                 .map_err(|error| {
@@ -4793,6 +4803,11 @@ impl V2ApplyService {
         #[cfg(test)]
         if let Some(staged) = staged_snapshot_bytes_for_test {
             let committed = crate::snapshot::canonical_state_snapshot_bytes(self.state.as_ref());
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref()),
+                Hash::new(&committed),
+                "committed streaming WSV hash must match its canonical semantic bytes",
+            );
             if staged != committed {
                 panic!(
                     "staged/committed WSV snapshot mismatch after block commit: {}",

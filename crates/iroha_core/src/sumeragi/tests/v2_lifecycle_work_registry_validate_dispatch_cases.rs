@@ -215,7 +215,8 @@
         let pending = ownership
             .pending_adapter_effect_binding(&effect)
             .expect("mint pending registry fixture");
-        ConcreteLifecycleWork::from_exact(effect, pending).expect("construct exact concrete work")
+        ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
+            .expect("construct exact concrete work")
     }
 
     fn owner(seed: u8, first_ordinal: u128) -> OwnerId {

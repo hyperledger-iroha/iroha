@@ -129,11 +129,13 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
         LocalValidateReplayEvidenceV1,
     },
-    v2_lifecycle_coordinator::RecoveredDecisionApplyDispatchKeyV1,
+    v2_lifecycle_coordinator::{
+        ProductionLifecycleLiveClockActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+    },
     v2_recovery::PendingKuraApply,
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
-        ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
+        ExactServePredecessorCompletionEvidence, ExactServePredecessorObservation,
         LeaderWireRuntimeTerminal, LocalProposalEffectOwnership, LocalProposalReadyCommandIdentity,
         NetworkIngressError, PendingRuntimeEffectBinding, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
@@ -4058,7 +4060,7 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
     })
 }
 
-impl V2EffectExecutor<SerializedV2Runtime> {
+impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Preflight one dedicated recovered request without retaining an executor borrow.
     ///
     /// `Ok(false)` is reserved for the configured request-capacity bound. Every
@@ -4113,7 +4115,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         }
         Ok(true)
     }
+}
 
+impl V2EffectExecutor<SerializedV2Runtime> {
     /// Reserve the sole dedicated recovered Decision Fetch owner position.
     ///
     /// Exact hash, logical request identity, body coordinates, and both ordinary
@@ -4345,7 +4349,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     }
 
     /// Publish executor-retained owners and compare the retained-response
-    /// target without resetting the selected-Serve predecessor witness.
+    /// target without resetting the selected-Serve predecessor retry latch.
     pub(crate) fn older_runtime_lifecycle_predates_retained_response(
         &mut self,
         now: Instant,
@@ -4358,27 +4362,30 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .map_err(EffectExecutorError::Runtime)
     }
 
-    /// Publish executor-retained owners and return the stable witness for the
-    /// current continuous predecessor episode of one exact Serve ticket.
-    pub(crate) fn exact_serve_predecessor_episode_witness(
+    /// Publish executor-retained owners and directly observe the runnable
+    /// predecessor prefix of one exact Serve ticket.
+    pub(crate) fn exact_serve_predecessor_observation(
         &mut self,
         now: Instant,
         serve_lifecycle_ordinal: u128,
         completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<Option<ExactServePredecessorEpisodeWitness>, EffectExecutorError> {
+    ) -> Result<ExactServePredecessorObservation, EffectExecutorError> {
         self.ensure_open()?;
         self.publish_external_lifecycle_owners()?;
         self.runtime
-            .exact_serve_predecessor_episode_witness(
-                now,
-                serve_lifecycle_ordinal,
-                completion_evidence,
-            )
+            .exact_serve_predecessor_observation(now, serve_lifecycle_ordinal, completion_evidence)
             .map_err(EffectExecutorError::Runtime)
     }
 
     /// Arm the runtime pacemaker after all height startup work has completed.
-    pub(crate) fn arm_live_clocks(&mut self, now: Instant) -> Result<(), RuntimeClockError> {
+    pub(in crate::sumeragi) fn arm_live_clocks(
+        &mut self,
+        _permit: ProductionLifecycleLiveClockActivationPermitV1,
+        now: Instant,
+    ) -> Result<(), RuntimeClockError> {
+        if self.pending_tip_recovery.is_some() {
+            return Err(RuntimeClockError::PendingKuraRecovery);
+        }
         let tag = self.current_tag();
         let retain = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
@@ -4479,6 +4486,21 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
     ) -> Result<wire::SumeragiV2Status, AdapterError> {
         self.runtime.successor_activation_status_snapshot()
+    }
+
+    /// Snapshot one completed interrupted tip while pacemaker clocks stay unarmed.
+    pub(in crate::sumeragi) fn pending_kura_activation_status_snapshot(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        let pending_ready = self.ready_to_finish()
+            && self.lifecycle_live_clocks_are_unarmed()
+            && self.pending_tip_recovery.as_ref().is_some_and(|evidence| {
+                evidence.stage() == PendingKuraApplyRecoveryStage::Completed
+            });
+        if !pending_ready {
+            return Err(AdapterError::PendingKuraActivationNotReady);
+        }
+        self.runtime.pending_kura_activation_status_snapshot()
     }
 
     /// Bind an interrupted Kura tip to the exact reducer Decision and durable
@@ -16974,7 +16996,10 @@ mod tests {
         )
         .expect("capacity-two executor");
         executor
-            .arm_live_clocks(started)
+            .arm_live_clocks(
+                ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                started,
+            )
             .expect("arm source-faithful timeout");
         assert!(
             executor
@@ -17114,7 +17139,7 @@ mod tests {
     }
 
     #[test]
-    fn late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps() {
+    fn late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps() {
         let mut fixture = ProductionTransportFixture::new();
         let fetch_ordinal = fixture
             .lifecycle_ordinals
@@ -17182,12 +17207,13 @@ mod tests {
             .lifecycle_ordinals
             .reserve_one()
             .expect("reserve the selected Serve target after Fetch");
+        let initial = fixture
+            .executor
+            .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+            .expect("observe the selected Serve before Fetch completion");
+        assert!(initial.should_open_predecessor_admission());
         assert!(
-            fixture
-                .executor
-                .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-                .expect("observe the selected Serve before Fetch completion")
-                .is_none(),
+            !initial.has_runnable_predecessor(),
             "passive Fetch transport work alone cannot block Serve"
         );
 
@@ -17195,14 +17221,12 @@ mod tests {
             .executor
             .complete_body_reconstruction(&task, manifest, body, &mut services)
             .expect("late reconstruction materializes BodyAvailable under the Fetch owner");
-        let witness = fixture
+        let observation = fixture
             .executor
-            .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-            .expect("observe late BodyAvailable behind the selected Serve")
-            .expect("late runnable predecessor reopens the completed Serve episode");
-        assert_eq!(witness.serve_lifecycle_ordinal(), serve_ordinal);
-        assert_eq!(witness.predecessor_lifecycle_ordinal(), fetch_ordinal);
-        assert_eq!(witness.episode(), 1);
+            .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+            .expect("observe late BodyAvailable behind the selected Serve");
+        assert!(observation.should_open_predecessor_admission());
+        assert!(observation.has_runnable_predecessor());
         let retained_response_ordinal = fixture
             .lifecycle_ordinals
             .reserve_one()
@@ -17216,14 +17240,12 @@ mod tests {
                 )
                 .expect("exercise the published retained-response predecessor probe")
         );
-        assert_eq!(
-            fixture
-                .executor
-                .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-                .expect("retained-response probing cannot reset the selected-Serve witness"),
-            Some(witness),
-            "one continuous predecessor prefix retains one witness across target probes"
-        );
+        let repeated = fixture
+            .executor
+            .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+            .expect("retained-response probing cannot reset selected-Serve state");
+        assert!(repeated.should_open_predecessor_admission());
+        assert!(repeated.has_runnable_predecessor());
         assert_eq!(
             fixture.executor.status().queued_runtime_completions,
             1,
@@ -17249,28 +17271,28 @@ mod tests {
             "the Store successor must keep the reopened Fetch owner"
         );
         assert!(fixture.executor.pending_fetches.is_empty());
+        let passive_store = fixture
+            .executor
+            .exact_serve_predecessor_observation(Instant::now(), serve_ordinal, None)
+            .expect("an incomplete Store remains passive");
+        assert!(!passive_store.should_open_predecessor_admission());
         assert!(
-            fixture
-                .executor
-                .exact_serve_predecessor_episode_witness(Instant::now(), serve_ordinal, None)
-                .expect("an incomplete Store remains passive")
-                .is_none(),
-            "pending Store work alone cannot reopen the Serve episode"
+            !passive_store.has_runnable_predecessor(),
+            "pending Store work alone cannot reopen predecessor admission"
         );
         let stored_completion_evidence =
             ExactServePredecessorCompletionEvidence::try_new(fetch_ordinal)
                 .expect("tracked Store completion retains the exact Fetch ordinal");
         let replenished = fixture
             .executor
-            .exact_serve_predecessor_episode_witness(
+            .exact_serve_predecessor_observation(
                 Instant::now(),
                 serve_ordinal,
                 Some(stored_completion_evidence),
             )
-            .expect("a completed Store is runnable")
-            .expect("a completed Store reopens one later Serve episode");
-        assert_eq!(replenished.predecessor_lifecycle_ordinal(), fetch_ordinal);
-        assert_eq!(replenished.episode(), 2);
+            .expect("a completed Store is runnable");
+        assert!(replenished.should_open_predecessor_admission());
+        assert!(replenished.has_runnable_predecessor());
         assert!(!fixture.executor.status().fail_closed);
     }
 
@@ -17364,7 +17386,10 @@ mod tests {
         let started = Instant::now();
         fixture
             .executor
-            .arm_live_clocks(started)
+            .arm_live_clocks(
+                ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                started,
+            )
             .expect("arm source-faithful timeout/retransmission clocks");
         let mut services = FakeServices {
             requester_key: Some(fixture.requester_key.clone()),
@@ -17508,7 +17533,10 @@ mod tests {
         let started = Instant::now();
         fixture
             .executor
-            .arm_live_clocks(started)
+            .arm_live_clocks(
+                ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                started,
+            )
             .expect("arm production retransmission clocks");
         let mut services = FakeServices {
             requester_key: Some(fixture.requester_key.clone()),
@@ -24704,9 +24732,7 @@ mod tests {
             )) if hash == request_hash
         ));
     }
-
     include!("v2_effects_certified_response_and_apply_cases_tests.rs");
-
     include!("tests/v2_effects_kura_tip_replay.rs");
     include!("tests/v2_effects_01_view_churn_and_runtime_steps.rs");
     #[test]

@@ -4,9 +4,9 @@ use super::*;
 
 /// Borrowed ownership of the exact runner ingress during preactivation recovery.
 ///
-/// This aperture intentionally opens the normal per-height fair ingress, as the
+/// This aperture intentionally opens the retained activation's normal per-height fair ingress, as the
 /// legacy recovery loop does. Its caller must still dequeue only messages
-/// admitted by the canonical executed-body recovery predicate. The eventual
+/// admitted by the canonical executed-body recovery predicate. The exact
 /// activation authority remains mutably borrowed for the aperture's lifetime,
 /// so it cannot publish status or be substituted while recovery is live.
 #[must_use = "the preactivation ingress aperture must remain live for recovery"]
@@ -75,7 +75,7 @@ fn open_canonical_recovery_ingress<'activation>(
 }
 
 impl ProductionLifecycleRunnerActivationV1 {
-    /// Borrow this future activation's exact ingress for preactivation recovery.
+    /// Borrow this activation's exact ingress for preactivation recovery.
     pub(in crate::sumeragi) fn open_canonical_recovery_ingress(
         &mut self,
         launched_ingress: &Arc<FairV2Ingress>,
@@ -86,6 +86,16 @@ impl ProductionLifecycleRunnerActivationV1 {
 
 impl ProductionLifecycleCompleteTipRunnerActivationV1 {
     /// Borrow this CompleteTip activation's exact ingress without publishing H+1.
+    pub(in crate::sumeragi) fn open_canonical_recovery_ingress(
+        &mut self,
+        launched_ingress: &Arc<FairV2Ingress>,
+    ) -> Result<ProductionLifecycleCanonicalRecoveryIngressV1<'_>, V2RunnerError> {
+        open_canonical_recovery_ingress(&self.ingress_ready, &self.block_ingress, launched_ingress)
+    }
+}
+
+impl ProductionLifecyclePendingKuraRunnerActivationV1 {
+    /// Borrow this interrupted-tip activation's exact ingress before no-clock activation.
     pub(in crate::sumeragi) fn open_canonical_recovery_ingress(
         &mut self,
         launched_ingress: &Arc<FairV2Ingress>,

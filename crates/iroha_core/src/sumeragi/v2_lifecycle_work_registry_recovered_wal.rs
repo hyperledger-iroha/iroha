@@ -364,7 +364,7 @@ impl<'registry> InstalledRecoveredWalSignStorage<'registry> {
         let Self {
             store,
             repaired,
-            mut installed,
+            installed,
         } = self;
         if !store.load().is_ok_and(|loaded| loaded == repaired) {
             return Err(ProductionRecoveredWalStorageError::new(

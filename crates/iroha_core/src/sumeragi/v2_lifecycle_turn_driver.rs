@@ -104,8 +104,8 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressSelectionV1 {
 ///
 /// The exact inbound carrier, ordinary dequeue disposition, and any stateful
 /// Certified-Serve result cannot be separated at the runner-facing boundary.
-/// Until the future runner cutover routes this token through the activated
-/// lifecycle consumer, Drop closes consensus admission so a prepared Serve
+/// The lifecycle height driver routes this token through the activated shared
+/// runner consumer. Drop closes consensus admission so a prepared Serve
 /// placeholder or staged negative can never be silently abandoned.
 #[must_use = "the exact ordinary ingress handoff must be consumed by the runner"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -593,10 +593,8 @@ impl LaunchedProductionLifecycleV1 {
     /// Service one exact outer Ingress turn through recovered Fetch Phase A.
     ///
     /// A retained capacity wait is classified before any fresh queue probe.
-    /// Fresh selection accepts only the existing queue-owned recovered winner;
-    /// every other winner returns the unchanged current turn.
-    // TODO: Route the ordinary winner selected by `v2_runner::run_inner` through this
-    // activated consumer at the atomic process-lifetime scheduler cutover.
+    /// Fresh selection accepts the queue-owned recovered winner or transfers
+    /// the exact ordinary winner to the activated shared runner consumer.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(
         &mut self,
@@ -1003,18 +1001,14 @@ impl ActivatedProductionLifecycleV1 {
             == Some(expected))
     }
 
-    /// Claim and immediately finish one finite local-producer episode in tests.
+    /// Claim one finite local-producer episode for a lifecycle finalization test.
     #[cfg(test)]
-    pub(in crate::sumeragi) fn discharge_certified_serve_producer_episode_for_test(
+    pub(in crate::sumeragi) fn take_certified_serve_producer_episode_for_test(
         &self,
-    ) -> Result<bool, String> {
-        let episode = self
-            .launched
+    ) -> Result<Option<crate::sumeragi::v2_worker::CertifiedServeProducerEpisode>, String> {
+        self.launched
             .services
-            .try_begin_certified_serve_producer_episode()?;
-        let claimed = episode.is_some();
-        drop(episode);
-        Ok(claimed)
+            .try_begin_certified_serve_producer_episode()
     }
 }
 

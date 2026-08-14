@@ -1111,7 +1111,8 @@ impl DurablePayloadReference {
                 Self::None,
                 None
                 | Some(
-                    TerminalOutcome::Cancelled
+                    TerminalOutcome::Advanced
+                    | TerminalOutcome::Cancelled
                     | TerminalOutcome::Rejected(_)
                     | TerminalOutcome::Failed(_),
                 ),
@@ -2303,12 +2304,9 @@ mod tests {
             LifecycleWorkClass::Fetch,
             Some(TerminalOutcome::Completed(None))
         ));
-        assert!(
-            !DurablePayloadReference::None
-                .matches_terminal(LifecycleWorkClass::Fetch, Some(TerminalOutcome::Advanced))
-        );
         for terminal in [
             None,
+            Some(TerminalOutcome::Advanced),
             Some(TerminalOutcome::Cancelled),
             Some(TerminalOutcome::Rejected(7)),
             Some(TerminalOutcome::Failed(9)),

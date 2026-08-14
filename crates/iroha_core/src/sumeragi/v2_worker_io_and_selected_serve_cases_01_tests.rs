@@ -218,7 +218,7 @@ fn completion_sources_alternate_under_simultaneous_bursts() {
 }
 
 #[test]
-fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_io() {
+fn exact_serve_predecessor_admission_services_older_local_without_admitting_later_io() {
     let (mut service, _) = fixture();
     let (command_tx, _command_rx, admission) = test_io_command_channel(2);
     let (completion_tx, completion_rx) = mpsc::sync_channel(2);
@@ -281,7 +281,7 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
             .expect("project the completed predecessor without consuming it")
             .map(ExactServePredecessorCompletionEvidence::lifecycle_ordinal),
         Some(older_task.lifecycle_ordinal()),
-        "the least strict local predecessor must reopen the exact Serve episode"
+        "the least strict local predecessor must open the exact Serve aperture"
     );
     assert!(
         service
@@ -296,7 +296,7 @@ fn exact_serve_predecessor_episode_services_older_local_without_admitting_later_
         retained_runtime: false,
     } = service.take_exact_serve_predecessor_completion(true, first_ticket_ordinal)
     else {
-        panic!("the strictly older local reconstruction must own the bounded episode");
+        panic!("the strictly older local reconstruction must own the bounded aperture");
     };
     assert_eq!(task, older_task);
     service
@@ -466,7 +466,7 @@ fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
 }
 
 #[test]
-fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
+fn repeated_exact_serve_admissions_close_all_older_sources_before_later_io() {
     let (mut service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
     let request = authenticated_serve_request(
@@ -571,11 +571,9 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
             body: payload.to_vec().into(),
         });
 
-    assert!(
-        service
-            .claim_certified_serve_runtime_episode(barrier)
-            .expect("claim first bounded predecessor turn")
-    );
+    let first_admission = service
+        .open_certified_serve_predecessor_admission(barrier)
+        .expect("open first bounded predecessor admission");
     assert!(matches!(
         service.take_exact_serve_predecessor_completion(
             true,
@@ -595,15 +593,13 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
         .expect("attached completion corridor")
         .admission
         .acknowledge_completion_at(0);
-    service
-        .finish_certified_serve_runtime_episode_turn(barrier, true)
-        .expect("remaining same-rank local owner reopens the episode");
+    first_admission
+        .finish()
+        .expect("close first bounded predecessor admission");
 
-    assert!(
-        service
-            .claim_certified_serve_runtime_episode(barrier)
-            .expect("claim second bounded predecessor turn")
-    );
+    let second_admission = service
+        .open_certified_serve_predecessor_admission(barrier)
+        .expect("open second bounded predecessor admission");
     let IoCompletionTake {
         completion:
             Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed { task, .. })),
@@ -623,14 +619,9 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
             retained_runtime: false,
         }
     ));
-    service
-        .finish_certified_serve_runtime_episode_turn(barrier, false)
-        .expect("later-rank I/O cannot keep the older-owner episode open");
-    assert!(
-        !service
-            .claim_certified_serve_runtime_episode(barrier)
-            .expect("completed episode cannot be reclaimed")
-    );
+    second_admission
+        .finish()
+        .expect("later-rank I/O cannot keep predecessor admission open");
     assert_eq!(
         service
             .io
@@ -657,7 +648,61 @@ fn repeated_exact_serve_claims_close_all_older_sources_before_later_io() {
 }
 
 #[test]
-fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
+fn dropping_exact_serve_predecessor_admission_closes_transient_aperture() {
+    let (mut service, keys) = fixture_with_block_payload();
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let request = authenticated_serve_request(
+        &service.context,
+        &keys[1],
+        proposal.round,
+        proposal.subject,
+        wire::GlobalPhase::Prepare,
+    );
+    let via = service.context.roster[0].validator.clone();
+    let (command_tx, _command_rx, queue_admission) = test_io_command_channel(4);
+    let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
+    assert!(matches!(
+        ingress.try_push(certified_serve_inbound(request.request(), via)),
+        Ok(FairV2IngressPushDisposition::Enqueued)
+    ));
+    let barrier = command_tx
+        .serve_barrier()
+        .expect("inspect guard-drop barrier")
+        .expect("admitted exact request owns a barrier");
+    let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission: queue_admission,
+    });
+
+    let predecessor_admission = service
+        .open_certified_serve_predecessor_admission(barrier)
+        .expect("open the transient predecessor admission");
+    assert!(
+        service
+            .open_certified_serve_predecessor_admission(barrier)
+            .is_err(),
+        "an armed guard must keep a second admission closed"
+    );
+    drop(predecessor_admission);
+    service
+        .open_certified_serve_predecessor_admission(barrier)
+        .expect("guard Drop must close the aperture so a later turn can reopen it")
+        .finish()
+        .expect("finish the reopened predecessor admission");
+
+    ingress.close();
+    ingress
+        .unbind_certified_serve_gate(&gate)
+        .expect("retire guard-drop gate");
+    drop(service.io.take());
+}
+
+#[test]
+fn exact_serve_predecessor_admission_is_transient_and_barrier_bound() {
     let (service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
     let request = authenticated_serve_request(
@@ -687,79 +732,34 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
     ));
     let barrier = command_tx
         .serve_barrier()
-        .expect("inspect predecessor-witness barrier")
+        .expect("inspect predecessor-admission barrier")
         .expect("admitted exact request owns a barrier");
     assert_eq!(barrier.scheduler_ordinal(), 3);
 
-    let first =
-        ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 1, 1);
+    command_tx
+        .open_serve_predecessor_admission(barrier)
+        .expect("open the first direct predecessor admission");
     assert!(
         command_tx
-            .claim_serve_runtime_episode(barrier)
-            .expect("claim initial predecessor turn")
-    );
-    assert!(
-        !command_tx
-            .observe_serve_predecessor_episode_witness(barrier, first)
-            .expect("record initial runtime witness")
+            .open_serve_predecessor_admission(barrier)
+            .is_err(),
+        "one selected ticket cannot open two overlapping predecessor admissions"
     );
     command_tx
-        .finish_serve_runtime_episode_turn(barrier, false)
-        .expect("seal exhausted initial predecessor turn");
-    assert!(
-        !command_tx
-            .observe_serve_predecessor_episode_witness(barrier, first)
-            .expect("same physical episode must coalesce")
-    );
-    assert!(
-        !command_tx
-            .claim_serve_runtime_episode(barrier)
-            .expect("same witness cannot reopen a completed turn")
-    );
-
-    let conflicting =
-        ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 1);
+        .close_serve_predecessor_admission(barrier)
+        .expect("close the first direct predecessor admission");
     assert!(
         command_tx
-            .observe_serve_predecessor_episode_witness(barrier, conflicting)
+            .close_serve_predecessor_admission(barrier)
             .is_err(),
-        "one episode cannot change its exact predecessor evidence"
-    );
-    let skipped =
-        ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 3);
-    assert!(
-        command_tx
-            .observe_serve_predecessor_episode_witness(barrier, skipped)
-            .is_err(),
-        "the consumer cannot skip a predecessor episode ordinal"
-    );
-
-    let replenished =
-        ExactServePredecessorEpisodeWitness::for_test(barrier.scheduler_ordinal(), 2, 2);
-    assert!(
-        command_tx
-            .observe_serve_predecessor_episode_witness(barrier, replenished)
-            .expect("strictly newer runtime witness reopens the target")
-    );
-    assert!(
-        command_tx
-            .claim_serve_runtime_episode(barrier)
-            .expect("claim exactly one replenished predecessor turn")
-    );
-    assert!(
-        !command_tx
-            .observe_serve_predecessor_episode_witness(barrier, replenished)
-            .expect("repeated replenishment witness must stutter")
+        "an already-closed admission cannot be retired twice"
     );
     command_tx
-        .finish_serve_runtime_episode_turn(barrier, false)
-        .expect("seal replenished predecessor turn");
-    assert!(
-        command_tx
-            .observe_serve_predecessor_episode_witness(barrier, first)
-            .is_err(),
-        "a consumed predecessor episode cannot regress"
-    );
+        .open_serve_predecessor_admission(barrier)
+        .expect("a later direct runtime observation can open a fresh turn");
+    command_tx
+        .close_serve_predecessor_admission(barrier)
+        .expect("close the later direct predecessor admission");
 
     let (admission, committed) = drain_and_commit_gated_serve(
         &ingress,
@@ -782,11 +782,11 @@ fn completed_exact_serve_episode_reopens_once_for_new_runtime_witness() {
     ingress.close();
     ingress
         .unbind_certified_serve_gate(&gate)
-        .expect("retire predecessor-witness gate");
+        .expect("retire predecessor-admission gate");
 }
 
 #[test]
-fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission() {
+fn exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work() {
     let (service, keys) = fixture_with_block_payload();
     let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
     let request = authenticated_serve_request(
@@ -826,14 +826,12 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
         .expect("inspect the exact barrier")
         .expect("the admitted target owns a barrier");
     assert_eq!(barrier.scheduler_ordinal(), 2);
-    assert!(
-        command_tx
-            .claim_serve_runtime_episode(barrier)
-            .expect("claim the bounded causal predecessor turn")
-    );
+    command_tx
+        .open_serve_predecessor_admission(barrier)
+        .expect("open the bounded causal predecessor admission");
     assert!(
         !command_tx
-            .serve_runtime_predecessor_capacity_available(barrier)
+            .serve_predecessor_capacity_available(barrier)
             .expect("inspect the full frozen prefix"),
         "the runner must wait instead of dispatching a retained effect into a full queue"
     );
@@ -879,20 +877,20 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
     ));
     assert!(
         command_tx
-            .serve_runtime_predecessor_capacity_available(barrier)
+            .serve_predecessor_capacity_available(barrier)
             .expect("the drained Control prefix releases causal capacity")
     );
     command_tx
         .try_send(sign(1))
-        .expect("the claimed turn admits its strictly older causal owner");
+        .expect("the checked aperture admits its strictly older causal owner");
     {
         let state = command_tx.queue.lock();
         assert!(matches!(
             state
                 .serve_ingress_reservation
                 .as_ref()
-                .map(|reservation| reservation.runtime_episode),
-            Some(CertifiedServeRuntimeEpisodeState::Claimed {
+                .map(|reservation| reservation.predecessor_admission),
+            Some(CertifiedServePredecessorAdmissionState::Open {
                 predecessor_ordinal: Some(1)
             })
         ));
@@ -937,7 +935,7 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
     }
     assert!(
         command_tx
-            .serve_runtime_predecessor_capacity_available(barrier)
+            .serve_predecessor_capacity_available(barrier)
             .expect("the older owner can borrow the uncommitted target unit")
     );
     command_tx
@@ -973,13 +971,8 @@ fn exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission
     command_rx.complete_work(EffectWorkId::for_test(1));
     command_tx.acknowledge_completion(EffectWorkId::for_test(1));
     command_tx
-        .finish_serve_runtime_episode_turn(barrier, false)
-        .expect("the mandatory full recheck seals the exhausted causal episode");
-    assert!(
-        !command_tx
-            .claim_serve_runtime_episode(barrier)
-            .expect("sealed causal ownership cannot be resurrected")
-    );
+        .close_serve_predecessor_admission(barrier)
+        .expect("the mandatory full recheck closes the causal admission");
 
     let (admission, committed) = drain_and_commit_gated_serve(
         &ingress,

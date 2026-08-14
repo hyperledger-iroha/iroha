@@ -442,15 +442,7 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "CanonicalExecutedBlockRecovery::accept_response",
     )
 )
-_ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset(
-    {
-        (
-            "SumeragiV2NativeApplicationEvidence",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "run_inner",
-        )
-    }
-)
+_ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset()
 _PRODUCTION_TOKEN_REBINDINGS = {
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
@@ -472,11 +464,6 @@ _PRODUCTION_TOKEN_REBINDINGS = {
         "V2LaneWorkAdapter::has_pending_historical_recovery",
         "Err(_) => true",
     ): "!self.historical_recovery_sessions.is_empty()",
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "run_inner",
-        "service_next_native_participant_recovery_request",
-    ): "service_historical_recovery_tick",
     (
         "crates/iroha_core/src/queue.rs",
         "release_lane_reservations_in_order_inner",

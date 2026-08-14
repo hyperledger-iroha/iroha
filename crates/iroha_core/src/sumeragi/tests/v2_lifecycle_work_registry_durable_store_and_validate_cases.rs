@@ -247,10 +247,9 @@
         let DurableStoreBody {
             effect, pending, ..
         } = store;
-        let pending_work = ConcreteLifecycleWork {
-            digest,
-            kind: ConcreteLifecycleWorkKind::PendingAdapter { effect, pending },
-        };
+        let pending_work = ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
+            .expect("construct inert pending Store fixture");
+        assert_eq!(pending_work.digest, digest);
         assert!(pending_work.validate_exact());
         assert!(registry.entries.insert(address, pending_work).is_none());
         assert!(matches!(
@@ -651,10 +650,9 @@
         let DurableValidateBody {
             effect, pending, ..
         } = validate;
-        let pending_work = ConcreteLifecycleWork {
-            digest,
-            kind: ConcreteLifecycleWorkKind::PendingAdapter { effect, pending },
-        };
+        let pending_work = ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
+            .expect("construct inert pending Validate fixture");
+        assert_eq!(pending_work.digest, digest);
         assert!(pending_work.validate_exact());
         assert!(registry.entries.insert(address, pending_work).is_none());
         assert!(matches!(
@@ -1099,10 +1097,9 @@
         let DurableValidateBody {
             effect, pending, ..
         } = validate;
-        let pending = ConcreteLifecycleWork {
-            digest,
-            kind: ConcreteLifecycleWorkKind::PendingAdapter { effect, pending },
-        };
+        let pending = ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
+            .expect("construct inert pending Validate fixture");
+        assert_eq!(pending.digest, digest);
         assert!(pending.validates_at(fixture.address));
         assert!(
             fixture

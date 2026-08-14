@@ -2899,10 +2899,10 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         """,
                     ),
                     CrossToolProductionCallContract(
-                        source="crates/iroha_core/src/sumeragi/v2_runner.rs",
+                        source="crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
                         item="recovered",
                         item_token_sha256=(
-                            "18d0d9f57698c98fed549b3901c76f2f7750f0066c65eced99b4a4e9b2acb255"
+                            "a99d3aec22c01501fabb4e6b90526ae066b6728ab78043301476653432fac5fd"
                         ),
                         brace_context=(("impl", "PendingSuccessorActivation"),),
                         projection="lifecycle",
@@ -3096,7 +3096,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 verus_source=_GENERAL_VERUS_SOURCE,
                 production_sources=(
                     "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-                    "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                    "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
                 ),
                 verus_parameters=(
                     "projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,"

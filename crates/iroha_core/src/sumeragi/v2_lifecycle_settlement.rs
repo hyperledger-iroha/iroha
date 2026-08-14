@@ -1,8 +1,8 @@
 //! Durable settlement gate for lifecycle turns.
 
 use super::{
-    CoordinatorFault, LifecycleCoordinator, LifecycleKey, LifecycleStageKind, LifecycleState,
-    LifecycleWorkClass, TerminalOutcome, TurnLease, TurnOutcome, WaitSource,
+    CoordinatorFault, LifecycleCoordinator, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
+    TerminalOutcome, TurnLease, TurnOutcome, WaitSource,
     replay_authority::CertifiedServeTerminalReplayAuthorityPairV1, serve_and_producer_keys_match,
 };
 

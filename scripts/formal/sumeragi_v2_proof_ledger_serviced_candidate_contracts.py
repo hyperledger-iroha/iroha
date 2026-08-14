@@ -12,7 +12,8 @@ def _serviced_candidate_production_source_fidelity_errors(
         "store": base / "serviced_candidate_store.rs",
         "adapter": base / "v2.rs",
         "runtime": base / "v2_runtime.rs",
-        "runner": base / "v2_runner.rs",
+        "lifecycle_launch": base / "v2_lifecycle_launch.rs",
+        "pending_startup": base / "v2_pending_kura_recovery.rs",
         "worker": base / "v2_worker.rs",
     }
     descriptions = {
@@ -21,7 +22,8 @@ def _serviced_candidate_production_source_fidelity_errors(
         "store": "V3/V4 serviced-candidate durable store",
         "adapter": "producer-continuation adapter ownership",
         "runtime": "producer-continuation serialized runtime",
-        "runner": "producer-continuation high-water binding",
+        "lifecycle_launch": "producer-continuation lifecycle high-water binding",
+        "pending_startup": "serialized lifecycle runtime construction",
         "worker": "producer-continuation worker quarantine ownership",
     }
     errors: list[str] = []
@@ -376,12 +378,16 @@ def _serviced_candidate_production_source_fidelity_errors(
         tuple(runtime_names.items()),
         _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256,
     )
-    runner_items = collect_items(
-        "runner",
-        (("run_inner", "run_inner"),),
-        _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256,
+    lifecycle_launch_items = collect_items(
+        "lifecycle_launch",
+        (("launch", "launch"),),
+        _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256,
     )
-
+    pending_startup_items = collect_items(
+        "pending_startup",
+        (("into_serialized_runtime", "into_serialized_runtime"),),
+        _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256,
+    )
     def require_item_sequence(
         source_key: str,
         items: dict[str, RustItem | None],
@@ -1978,19 +1984,37 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "leader-wire completion must retain exact runtime ordinal and causal key",
     )
     require_item_monotone_order(
-        "runner",
-        runner_items,
-        "run_inner",
+        "adapter",
+        adapter_items,
+        "prepare_leader_wire_launch",
         (
+            "adapter.mint_leader_wire_store_authority(expected_wal_path)",
             "adapter.restored_producer_continuation_ordinal_high_watermark()",
-            "lifecycle_ordinals.advance_past(high_watermark)",
-            "adapter.mint_leader_wire_store_authority(&wal_path)?",
-            "LeaderWireLifecycleStoreGate::open_with_safety_wal_authority",
-            "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
-            "LeaderWireIngressBinding::bind",
-            "SerializedV2Runtime::new_with_lifecycle_ordinals",
         ),
-        "both restored high-waters must advance the shared source before ingress/runtime construction",
+        "the sealed adapter must bind its WAL-adjacent store before projecting the restored producer high-water",
+    )
+    require_item_monotone_order(
+        "lifecycle_launch",
+        lifecycle_launch_items,
+        "launch",
+        (
+            "prepare_leader_wire_launch(launch_storage.wal_path())",
+            "ProductionV2Services::restore_lifecycle_ordinal_source",
+            "leader_wire_launch.restored_producer_ordinal_high_watermark()",
+            ".advance_past(high_watermark)",
+            "leader_wire_launch.open_gate",
+            "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
+            "ProductionLeaderWireIngressBindingV1::bind",
+            "adapter_startup.into_serialized_runtime",
+        ),
+        "both restored high-waters must advance the shared source before lifecycle ingress/runtime construction",
+    )
+    require_item_sequence(
+        "pending_startup",
+        pending_startup_items,
+        "into_serialized_runtime",
+        "crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals",
+        "the sealed lifecycle startup must construct the serialized runtime with the advanced shared ordinal source",
     )
 
     def seal_regressions(
@@ -2098,7 +2122,15 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256,
     )
 
-    for source_key in ("safety_wal", "store", "adapter", "runtime", "runner", "worker"):
+    for source_key in (
+        "safety_wal",
+        "store",
+        "adapter",
+        "runtime",
+        "lifecycle_launch",
+        "pending_startup",
+        "worker",
+    ):
         executable = structural[source_key]
         for forbidden in ("std::env", "var_os", "serde_json"):
             if forbidden in executable:

@@ -1,4 +1,16 @@
 #[cfg(feature = "bls")]
+fn run_marker_replay_test_on_stack() {
+    let handle = std::thread::Builder::new()
+        .name("production-lifecycle-marker-replay".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies)
+        .expect("spawn production lifecycle replay test");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) {
     let mut keys = (1_u8..=4)
         .map(|seed| {
@@ -10,8 +22,7 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
     let pops = keys
         .iter()
         .map(|key| {
-            iroha_crypto::bls_normal_pop_prove(key.private_key())
-                .expect("BLS proof of possession")
+            iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("BLS proof of possession")
         })
         .collect::<Vec<_>>();
     let roster = keys
@@ -46,6 +57,101 @@ fn authenticated_context() -> (wire::HeightContext, Vec<KeyPair>, Vec<Vec<u8>>) 
         leader_seed: [0x5A; 32],
     };
     (context, keys, pops)
+}
+
+#[cfg(feature = "bls")]
+fn rebind_production_serve_execution_commitment(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    requester_key: &KeyPair,
+    authenticated: crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+    execution_commitment: wire::ExecutionCommitment,
+) -> crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest {
+    let mut request = authenticated.request().clone();
+    request.certificate.execution_commitment = execution_commitment;
+    let vote_preimage = wire::Vote {
+        round: request.certificate.round,
+        proposal_round: request.certificate.proposal_round,
+        phase: request.certificate.phase,
+        subject: request.certificate.subject,
+        execution_commitment,
+        signer: *request
+            .certificate
+            .signers
+            .first()
+            .expect("production Serve fixture has a signer"),
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let signatures = request
+        .certificate
+        .signers
+        .iter()
+        .map(|index| {
+            let index = usize::try_from(*index).expect("fixture signer index fits usize");
+            Signature::new(keys[index].private_key(), &vote_preimage)
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    request.certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate rebound production Serve certificate");
+    request.signature = Signature::new(requester_key.private_key(), &request.signature_preimage())
+        .payload()
+        .to_vec();
+    let requester = request.requester.clone();
+    crate::sumeragi::v2_transport::authenticate_certified_body_request(
+        context,
+        request,
+        &requester,
+        |_, _| Ok::<(), &'static str>(()),
+    )
+    .expect("authenticate rebound production Serve request")
+}
+
+#[cfg(feature = "bls")]
+fn production_serve_requests_for_execution_commitment(
+    context: &wire::HeightContext,
+    keys: &[KeyPair],
+    local_validator: wire::ValidatorIndex,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    execution_commitment: wire::ExecutionCommitment,
+) -> (
+    crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+    crate::sumeragi::v2_transport::AuthenticatedCertifiedBodyRequest,
+) {
+    let local = usize::try_from(local_validator).expect("fixture validator index fits usize");
+    let rejected_requester = (local + 1) % keys.len();
+    let admitted_requester = (local + 2) % keys.len();
+    let non_local = (0..keys.len())
+        .filter(|index| *index != local)
+        .collect::<Vec<_>>();
+    let all = (0..keys.len()).collect::<Vec<_>>();
+    let build = |requester: usize, signers: &[usize]| {
+        let (request, _) = super::super::v2_worker::tests::production_authenticated_serve_request(
+            context,
+            keys,
+            &keys[requester],
+            round,
+            subject,
+            wire::GlobalPhase::Commit,
+            signers,
+        );
+        rebind_production_serve_execution_commitment(
+            context,
+            keys,
+            &keys[requester],
+            request,
+            execution_commitment,
+        )
+    };
+    (
+        build(rejected_requester, &non_local),
+        build(admitted_requester, &all),
+    )
 }
 
 #[cfg(feature = "bls")]
@@ -383,11 +489,9 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         proposer,
         subject: proposal_subject,
         manifest,
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification {
-                certificate: Some(alternate_parent_qc),
-            },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: Some(alternate_parent_qc),
+        }),
         signature: Vec::new(),
     };
     proposal.signature = Signature::new(
@@ -452,8 +556,7 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
             .expect("aggregate foreign parent CommitQC"),
     };
     let mut retargeted_proposal = proposal.clone();
-    let wire::ProposalJustification::ParentCommit(parent) =
-        &mut retargeted_proposal.justification
+    let wire::ProposalJustification::ParentCommit(parent) = &mut retargeted_proposal.justification
     else {
         unreachable!("fixture carries a parent certificate")
     };
@@ -534,13 +637,7 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
         .expect("parent QC")
         .aggregate_signature[0] ^= 0x80;
     assert!(matches!(
-        VerifiedHeightContext::successor(
-            successor,
-            proofs.clone(),
-            &artifact,
-            &receipt,
-            &proofs,
-        ),
+        VerifiedHeightContext::successor(successor, proofs.clone(), &artifact, &receipt, &proofs,),
         Err(AdapterError::Cryptography(_))
     ));
 
@@ -655,19 +752,18 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
     };
     let locked_subject = subject(0x32);
     let locked_payload = [0x32, 2];
-    let exact_manifest =
-        encode_payload(&context, locked_round, locked_subject, &locked_payload)
-            .expect("encode exact locked payload")
-            .manifest()
-            .clone();
+    let exact_manifest = encode_payload(&context, locked_round, locked_subject, &locked_payload)
+        .expect("encode exact locked payload")
+        .manifest()
+        .clone();
     let exact = wire::Proposal {
         round: locked_round,
         proposer: context.leader(locked_round.view),
         subject: locked_subject,
         manifest: exact_manifest,
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: Vec::new(),
     };
     assert!(proposal_is_safe_for_lock(
@@ -751,8 +847,7 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
         .expect("matching strict-higher PrepareQC authorizes the proposal subject");
 
     let mut missing_repeated_high = prepared_proposal.clone();
-    let wire::ProposalJustification::Timeout(timeout) =
-        &mut missing_repeated_high.justification
+    let wire::ProposalJustification::Timeout(timeout) = &mut missing_repeated_high.justification
     else {
         unreachable!("prepared fixture carries a timeout")
     };
@@ -774,8 +869,7 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
     );
 
     let mut invented_repeated_high = prepared_proposal.clone();
-    let wire::ProposalJustification::Timeout(timeout) =
-        &mut invented_repeated_high.justification
+    let wire::ProposalJustification::Timeout(timeout) = &mut invented_repeated_high.justification
     else {
         unreachable!("prepared fixture carries a timeout")
     };
@@ -786,8 +880,7 @@ fn locked_subject_reproposal_and_strict_higher_prepare_are_safe() {
     );
     let mut invented_registry = WireRegistry::new(&context).expect("wire registry");
     assert!(matches!(
-        invented_registry
-            .justification_to_core(&invented_repeated_high.justification, &context),
+        invented_registry.justification_to_core(&invented_repeated_high.justification, &context),
         Err(AdapterError::InvalidProposalJustification)
     ));
     assert!(
@@ -874,9 +967,9 @@ fn proposal(
         proposer,
         subject,
         manifest,
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: vec![0x91],
     }))
 }
@@ -979,8 +1072,7 @@ fn adapter_equivocation_evidence_derives_authority_from_all_three_signed_pairs()
 fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
     let directory = TempDir::new().expect("temporary directory");
     let (context, keys, pops) = authenticated_context();
-    let verified =
-        VerifiedHeightContext::genesis(context.clone(), pops).expect("verified context");
+    let verified = VerifiedHeightContext::genesis(context.clone(), pops).expect("verified context");
     let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("forged-equivocation-safety.wal"),
         verified,
@@ -1016,8 +1108,7 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
 
     let mut conflicting = proposal(&context, proposer, subject(0xE9));
     let wrong_index = (proposer_index + 1) % keys.len();
-    let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) =
-        &mut conflicting.payload
+    let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) = &mut conflicting.payload
     else {
         unreachable!("proposal helper returns a proposal")
     };
@@ -1044,8 +1135,7 @@ fn forged_conflict_cannot_mint_adapter_equivocation_evidence() {
         "a forged conflicting signature cannot consume the one evidence report"
     );
 
-    let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) =
-        &mut conflicting.payload
+    let wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal) = &mut conflicting.payload
     else {
         unreachable!("proposal helper returns a proposal")
     };
@@ -1361,9 +1451,7 @@ fn assert_process_only_predecessor_absent_after_restart(directory: &TempDir) {
     );
 }
 
-fn open_test(
-    directory: &TempDir,
-) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
+fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
     SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("safety.wal"),
         verified_genesis(context()),
@@ -1480,9 +1568,8 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
     consensus_key_hash: [u8; 32],
     records: Vec<WalRecordV2>,
 ) -> RecoveredAdapterStartup {
-    let verified =
-        VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
-            .expect("verify authenticated FIFO context");
+    let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
+        .expect("verify authenticated FIFO context");
     let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
         wal_path.clone(),
         verified,
@@ -1511,9 +1598,8 @@ fn write_and_reopen_authenticated_wal_startup_at_path(
     }
     drop(adapter);
 
-    let verified =
-        VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
-            .expect("reverify authenticated FIFO context");
+    let verified = VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
+        .expect("reverify authenticated FIFO context");
     SumeragiV2Adapter::open_recovered_startup_with_aggregator(
         wal_path,
         verified,
@@ -1531,9 +1617,7 @@ fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
     let signs = effects
         .iter()
         .enumerate()
-        .filter_map(|(index, effect)| {
-            matches!(effect, AdapterEffect::Sign { .. }).then_some(index)
-        })
+        .filter_map(|(index, effect)| matches!(effect, AdapterEffect::Sign { .. }).then_some(index))
         .collect::<Vec<_>>();
     let [index] = signs.as_slice() else {
         panic!("expected one current Sign beside inert completion effects: {effects:?}")
@@ -1733,28 +1817,25 @@ fn write_decision_startup_with_body_marker(
         &chunks,
     )
     .expect("derive Decision body-marker manifest");
-    let mut body_store =
-        super::super::v2_body_store::V2BodyStore::open(body_root, context.clone())
-            .expect("open Decision body-marker store");
+    let mut body_store = super::super::v2_body_store::V2BodyStore::open(body_root, context.clone())
+        .expect("open Decision body-marker store");
     let durable = body_store
         .store(manifest, canonical_wire)
         .expect("fsync Decision body-marker body");
     let commitment = execution_commitment(marker);
     let validation = match outcome {
-        DecisionBodyMarkerFixture::Validated => body_store.execute_durable_validation(
-            durable.clone(),
-            durable.manifest_hash(),
-            |_| Ok::<_, String>(commitment),
-        ),
-        DecisionBodyMarkerFixture::Rejected => body_store.execute_durable_validation(
-            durable.clone(),
-            durable.manifest_hash(),
-            |_| {
+        DecisionBodyMarkerFixture::Validated => {
+            body_store.execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
+                Ok::<_, String>(commitment)
+            })
+        }
+        DecisionBodyMarkerFixture::Rejected => {
+            body_store.execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                 Err::<wire::ExecutionCommitment, _>(
                     "deterministic Decision body rejection".to_owned(),
                 )
-            },
-        ),
+            })
+        }
     }
     .expect("fsync Decision body outcome marker");
     match outcome {
@@ -1895,8 +1976,7 @@ fn try_lifecycle_factory_inputs_for_test(
     state: Arc<crate::state::State>,
     kura: Arc<Kura>,
     local_signer: &KeyPair,
-) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1>
-{
+) -> Result<RecoveredLifecycleOwnerFactoryInputsV1, ProductionLifecycleOwnerStartupErrorV1> {
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Arc::new(crate::queue::Queue::from_config(
         iroha_config::parameters::actual::Queue::default(),
@@ -2065,16 +2145,15 @@ fn nonquorum_vote_retransmission_rebuilds_volatile_pool_after_restart() {
         height: context.height,
         view: 0,
     };
-    let vote =
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Prepare,
-            subject: subject(0x35),
-            execution_commitment: execution_commitment(0x35),
-            signer: 1,
-            signature: vec![0x35],
-        }));
+    let vote = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: subject(0x35),
+        execution_commitment: execution_commitment(0x35),
+        signer: 1,
+        signature: vec![0x35],
+    }));
     let replacement =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round,

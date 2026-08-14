@@ -35,327 +35,348 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/file_error_support.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
-    Path("crates/iroha_core/src/commit_roster_journal.rs"): (
-        Path("commit_roster_journal/tests.rs"),
+    Path('crates/iroha_core/src/commit_roster_journal.rs'): (
+        Path('commit_roster_journal/tests.rs'),
     ),
-    Path("crates/iroha_config/src/parameters/actual.rs"): (
-        Path("actual/runtime_tail_tests.rs"),
-        Path("actual/tests.rs"),
+    Path('crates/iroha_config/src/parameters/actual.rs'): (
+        Path('actual/runtime_tail_tests.rs'),
+        Path('actual/tests.rs'),
     ),
-    Path("crates/iroha_config/src/parameters/user.rs"): (
-        Path("user/kura.rs"),
-        Path("user/governance_dag_head_mode_tests.rs"),
-        Path("user/kura_and_snapshot_tests.rs"),
-        Path("user/runtime_tail_tests.rs"),
+    Path('crates/iroha_config/src/parameters/user.rs'): (
+        Path('user/kura.rs'),
+        Path('user/sorafs_moderation_query_bound_tests.rs'),
+        Path('user/governance_dag_head_mode_tests.rs'),
+        Path('user/kura_and_snapshot_tests.rs'),
+        Path('user/runtime_tail_tests.rs'),
     ),
-    Path("crates/iroha_data_model/src/block/consensus_v2.rs"): (
-        Path("consensus_v2_tests.rs"),
+    Path('crates/iroha_data_model/src/block/consensus_v2.rs'): (
+        Path('consensus_v2_tests.rs'),
     ),
-    Path("crates/iroha_core/src/kura.rs"): (
-        Path("kura/startup_finality_support.rs"),
-        Path("kura/bound_progress_and_retained_support.rs"),
-        Path("kura/autonomous_reservation_bounds.rs"),
-        Path("kura/certified_bundle_capacity_reservation_types.rs"),
-        Path("kura/prune_commit_merge_support.rs"),
-        Path("kura/merge_ledger_latest_execution_index.rs"),
-        Path("kura/replica_advert_and_body_status.rs"),
-        Path("kura/retained_finality_replica_authority.rs"),
-        Path("kura/durable_block_and_atomic_sidecar_io.rs"),
-        Path("kura/prune_intent_publication.rs"),
-        Path("kura/prune_recovery_capacity.rs"),
-        Path("kura/block_store_definition_and_test_controls.rs"),
-        Path("kura/pipeline_and_lane_artifacts.rs"),
-        Path("kura/autonomous_terminal_capacity.rs"),
-        Path("kura/autonomous_publication_temp_recovery.rs"),
-        Path("kura/historical_autonomous_recovery_temp_reconciliation.rs"),
-        Path("kura/hot_path_capacity_preflight.rs"),
-        Path("kura/autonomous_execution_view_capacity.rs"),
-        Path("kura/certified_bundle_capacity.rs"),
-        Path("kura/lane_artifact_budget.rs"),
-        Path("kura/autonomous_lifecycle_terminal_outcomes.rs"),
-        Path("kura/autonomous_release_authority.rs"),
-        Path("kura/autonomous_application_evidence.rs"),
-        Path("kura/indexed_sidecar_io.rs"),
-        Path("kura/indexed_sidecar_rewrite.rs"),
-        Path("kura/lane_history_compaction.rs"),
-        Path("kura/test_fault_injection_state.rs"),
-        Path("kura/test_fault_injection_controls.rs"),
-        Path("kura/file_error_support.rs"),
-        Path("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs"),
-        Path("kura/tests/01_prune_capacity_support.rs"),
-        Path("kura/tests/01a_retained_eviction_and_rewrite_tail.rs"),
-        Path("kura/tests/02_replacement_and_preflight.rs"),
-        Path("kura/tests/02a_unauthenticated_preflight.rs"),
-        Path("kura/tests/03_preflight_and_merge_entry.rs"),
-        Path("kura/tests/03a_preflight_and_merge_entry_tail.rs"),
-        Path("kura/tests/04_merge_log_and_associations.rs"),
-        Path("kura/tests/04b_merge_artifact_budget.rs"),
-        Path("kura/tests/04c_canonical_association_capacity.rs"),
-        Path("kura/tests/04d_prune_intent_capacity.rs"),
-        Path("kura/tests/05_merge_resolution_and_eviction.rs"),
-        Path("kura/tests/05a_replica_advert_and_body_eviction.rs"),
-        Path("kura/tests/06_eviction_and_autonomous_lanes.rs"),
-        Path("kura/tests/07a_autonomous_reservation_reconciliation_support.rs"),
-        Path("kura/tests/07_autonomous_lanes_and_sidecars.rs"),
-        Path("kura/tests/07b_autonomous_reservation_reconciliation_tests.rs"),
-        Path("kura/tests/07c_lane_execution_sidecar_tests.rs"),
-        Path("kura/tests/07d_strict_lane_ownership_barrier_tests.rs"),
-        Path("kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs"),
-        Path("kura/tests/07e_autonomous_publication_temp_recovery_tests.rs"),
-        Path("kura/tests/07e_terminal_capacity_hardening_tests.rs"),
-        Path("kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs"),
-        Path("kura/tests/07g_claim_capacity_preflight_tests.rs"),
-        Path("kura/tests/07h_autonomous_execution_view_capacity_tests.rs"),
-        Path("kura/tests/07i_historical_autonomous_batch_capacity_tests.rs"),
-        Path("kura/tests/07j_certified_bundle_capacity_tests.rs"),
-        Path("kura/tests/07k_historical_atomic_temp_recovery_tests.rs"),
-        Path("kura/tests/07l_pending_canonical_capacity_tests.rs"),
-        Path("kura/tests/08_lane_receipts_and_artifacts.rs"),
-        Path("kura/tests/08a_certified_lane_block_read_tests.rs"),
-        Path("kura/tests/08b_lane_history_compaction_capacity_tests.rs"),
-        Path("kura/tests/09_lane_artifacts_and_fastpq.rs"),
-        Path("kura/tests/10_native_amx_and_roster.rs"),
-        Path("kura/tests/10b_native_amx_prepublication_transition.rs"),
-        Path("kura/tests/11_roster_and_progress_sidecars.rs"),
-        Path("kura/tests/12_sidecar_index_and_pruning.rs"),
-        Path("kura/tests/13_manifests_and_fsync.rs"),
+    Path('crates/iroha_core/src/kura.rs'): (
+        Path('kura/startup_finality_support.rs'),
+        Path('kura/bound_progress_and_retained_support.rs'),
+        Path('kura/autonomous_reservation_bounds.rs'),
+        Path('kura/certified_bundle_capacity_reservation_types.rs'),
+        Path('kura/prune_commit_merge_support.rs'),
+        Path('kura/merge_ledger_latest_execution_index.rs'),
+        Path('kura/replica_advert_and_body_status.rs'),
+        Path('kura/retained_finality_replica_authority.rs'),
+        Path('kura/durable_block_and_atomic_sidecar_io.rs'),
+        Path('kura/prune_intent_publication.rs'),
+        Path('kura/prune_recovery_capacity.rs'),
+        Path('kura/block_store_definition_and_test_controls.rs'),
+        Path('kura/pipeline_and_lane_artifacts.rs'),
+        Path('kura/autonomous_terminal_capacity.rs'),
+        Path('kura/autonomous_publication_temp_recovery.rs'),
+        Path('kura/historical_autonomous_recovery_temp_reconciliation.rs'),
+        Path('kura/hot_path_capacity_preflight.rs'),
+        Path('kura/autonomous_execution_view_capacity.rs'),
+        Path('kura/certified_bundle_capacity.rs'),
+        Path('kura/lane_artifact_budget.rs'),
+        Path('kura/autonomous_lifecycle_terminal_outcomes.rs'),
+        Path('kura/autonomous_release_authority.rs'),
+        Path('kura/autonomous_application_evidence.rs'),
+        Path('kura/indexed_sidecar_io.rs'),
+        Path('kura/indexed_sidecar_rewrite.rs'),
+        Path('kura/lane_history_compaction.rs'),
+        Path('kura/test_fault_injection_state.rs'),
+        Path('kura/test_fault_injection_controls.rs'),
+        Path('kura/file_error_support.rs'),
+        Path('kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs'),
+        Path('kura/tests/01_prune_capacity_support.rs'),
+        Path('kura/tests/01a_retained_eviction_and_rewrite_tail.rs'),
+        Path('kura/tests/02_replacement_and_preflight.rs'),
+        Path('kura/tests/02a_unauthenticated_preflight.rs'),
+        Path('kura/tests/03_preflight_and_merge_entry.rs'),
+        Path('kura/tests/03a_preflight_and_merge_entry_tail.rs'),
+        Path('kura/tests/04_merge_log_and_associations.rs'),
+        Path('kura/tests/04b_merge_artifact_budget.rs'),
+        Path('kura/tests/04c_canonical_association_capacity.rs'),
+        Path('kura/tests/04d_prune_intent_capacity.rs'),
+        Path('kura/tests/05_merge_resolution_and_eviction.rs'),
+        Path('kura/tests/05a_replica_advert_and_body_eviction.rs'),
+        Path('kura/tests/06_eviction_and_autonomous_lanes.rs'),
+        Path('kura/tests/07a_autonomous_reservation_reconciliation_support.rs'),
+        Path('kura/tests/07_autonomous_lanes_and_sidecars.rs'),
+        Path('kura/tests/07b_autonomous_reservation_reconciliation_tests.rs'),
+        Path('kura/tests/07c_lane_execution_sidecar_tests.rs'),
+        Path('kura/tests/07d_strict_lane_ownership_barrier_tests.rs'),
+        Path('kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs'),
+        Path('kura/tests/07e_autonomous_publication_temp_recovery_tests.rs'),
+        Path('kura/tests/07e_terminal_capacity_hardening_tests.rs'),
+        Path('kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs'),
+        Path('kura/tests/07g_claim_capacity_preflight_tests.rs'),
+        Path('kura/tests/07h_autonomous_execution_view_capacity_tests.rs'),
+        Path('kura/tests/07i_historical_autonomous_batch_capacity_tests.rs'),
+        Path('kura/tests/07j_certified_bundle_capacity_tests.rs'),
+        Path('kura/tests/07k_historical_atomic_temp_recovery_tests.rs'),
+        Path('kura/tests/07l_pending_canonical_capacity_tests.rs'),
+        Path('kura/tests/08_lane_receipts_and_artifacts.rs'),
+        Path('kura/tests/08a_certified_lane_block_read_tests.rs'),
+        Path('kura/tests/08b_lane_history_compaction_capacity_tests.rs'),
+        Path('kura/tests/09_lane_artifacts_and_fastpq.rs'),
+        Path('kura/tests/10_native_amx_and_roster.rs'),
+        Path('kura/tests/10b_native_amx_prepublication_transition.rs'),
+        Path('kura/tests/11_roster_and_progress_sidecars.rs'),
+        Path('kura/tests/12_sidecar_index_and_pruning.rs'),
+        Path('kura/tests/13_manifests_and_fsync.rs'),
     ),
-    Path("crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs"): (
-        Path("10c_native_amx_latest_index_support_and_bounds.rs"),
+    Path('crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs'): (
+        Path('10c_native_amx_latest_index_support_and_bounds.rs'),
     ),
-    Path("crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"): (
-        Path("autonomous_merge_bundle_support.rs"),
-        Path("autonomous_reservation_types.rs"),
-        Path("autonomous_reservation_inventory.rs"),
-        Path("autonomous_reservation_classifier.rs"),
-        Path("historical_autonomous_recovery.rs"),
-        Path("native_amx_participant_application_artifacts.rs"),
+    Path('crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs'): (
+        Path('autonomous_merge_bundle_support.rs'),
+        Path('autonomous_reservation_types.rs'),
+        Path('autonomous_reservation_inventory.rs'),
+        Path('autonomous_reservation_classifier.rs'),
+        Path('historical_autonomous_recovery.rs'),
+        Path('native_amx_participant_application_artifacts.rs'),
     ),
-    Path("crates/iroha_core/src/kura/lane_geometry.rs"): (
-        Path("lane_geometry/bootstrap_path_safety.rs"),
-        Path("lane_geometry/bootstrap_relabel.rs"),
-        Path("lane_geometry/catalog_validation.rs"),
-        Path("lane_geometry/retirement_bounds.rs"),
-        Path("lane_geometry_tests/00_support.rs"),
-        Path("lane_geometry/native_amx_retained_window_tests.rs"),
-        Path("lane_geometry_tests/00_retirement.rs"),
-        Path("lane_geometry_tests/01_retirement_and_recovery.rs"),
-        Path("lane_geometry_tests/02_geometry_moves_and_journal.rs"),
-        Path("lane_geometry_tests/03_gc_and_startup.rs"),
+    Path('crates/iroha_core/src/kura/lane_geometry.rs'): (
+        Path('lane_geometry/bootstrap_path_safety.rs'),
+        Path('lane_geometry/bootstrap_relabel.rs'),
+        Path('lane_geometry/catalog_validation.rs'),
+        Path('lane_geometry/retirement_bounds.rs'),
+        Path('lane_geometry_tests/00_support.rs'),
+        Path('lane_geometry/native_amx_retained_window_tests.rs'),
+        Path('lane_geometry_tests/00_retirement.rs'),
+        Path('lane_geometry_tests/01_retirement_and_recovery.rs'),
+        Path('lane_geometry_tests/02_geometry_moves_and_journal.rs'),
+        Path('lane_geometry_tests/03_gc_and_startup.rs'),
     ),
-    Path("crates/iroha_core/src/merge_sidecar.rs"): (
-        Path("merge_sidecar_signing_guard_tests.rs"),
+    Path('crates/iroha_core/src/merge_sidecar.rs'): (
+        Path('merge_sidecar_signing_guard_tests.rs'),
     ),
-    Path("crates/iroha_core/src/queue.rs"): (
-        Path("queue/canonical_terminal_cleanup.rs"),
-        Path("queue/plan_journal_startup_atomicity_tests.rs"),
-        Path("queue/global_guard_claim_conflict_tests.rs"),
-        Path("queue/queue_metadata_and_admission_tests.rs"),
-        Path("queue/instruction_and_state_routing_tests.rs"),
-        Path("queue/routing_batch_admission_tests.rs"),
-        Path("queue/teu_limit_and_backlog_tests.rs"),
-        Path("queue/routing_projection_resilience_tests.rs"),
-        Path("queue/capacity_and_concurrency_tests.rs"),
-        Path("queue/pressure_resync_tests.rs"),
-        Path("queue/expiry_tracking_tests.rs"),
-        Path("queue/inflight_tracking_tests.rs"),
-        Path("queue/lane_reservation_tests.rs"),
-        Path("queue/lane_reservation_terminal_fault_tests.rs"),
-        Path("queue/reservation_recovery_tests.rs"),
+    Path('crates/iroha_core/src/queue.rs'): (
+        Path('queue/canonical_terminal_cleanup.rs'),
+        Path('queue/plan_journal_startup_atomicity_tests.rs'),
+        Path('queue/global_guard_claim_conflict_tests.rs'),
+        Path('queue/queue_metadata_and_admission_tests.rs'),
+        Path('queue/instruction_and_state_routing_tests.rs'),
+        Path('queue/routing_batch_admission_tests.rs'),
+        Path('queue/teu_limit_and_backlog_tests.rs'),
+        Path('queue/routing_projection_resilience_tests.rs'),
+        Path('queue/capacity_and_concurrency_tests.rs'),
+        Path('queue/pressure_resync_tests.rs'),
+        Path('queue/expiry_tracking_tests.rs'),
+        Path('queue/inflight_tracking_tests.rs'),
+        Path('queue/lane_reservation_tests.rs'),
+        Path('queue/lane_reservation_terminal_fault_tests.rs'),
+        Path('queue/reservation_recovery_tests.rs'),
     ),
-    Path("crates/iroha_core/src/queue/journal.rs"): (
-        Path("journal_reservation_commit_preflight.rs"),
-        Path("journal_direct_file_io.rs"),
-        Path("plan_journal_bounds_tests.rs"),
-        Path("plan_journal_replay_tests.rs"),
+    Path('crates/iroha_core/src/queue/journal.rs'): (
+        Path('journal_reservation_commit_preflight.rs'),
+        Path('journal_direct_file_io.rs'),
+        Path('plan_journal_bounds_tests.rs'),
+        Path('plan_journal_replay_tests.rs'),
     ),
-    Path("crates/iroha_core/src/state.rs"): (
-        Path("state/vpn_lease_validation.rs"),
-        Path("state/zk_asset_state.rs"),
-        Path("state/passive_lane_diagnostic_methods.rs"),
-        Path("state/diagnostic_state_generation.rs"),
-        Path("state/autonomous_predecessor_application.rs"),
-        Path("state/state_commit_lock_order_tests.rs"),
-        Path("state/transfer_transcript_tests.rs"),
-        Path("state/block_proof_tests.rs"),
-        Path("state/range_bounds.rs"),
-        Path("state/deserialize_core.rs"),
-        Path("state/deserialize_world.rs"),
-        Path("state/default_oracle.rs"),
+    Path('crates/iroha_core/src/state.rs'): (
+        Path('state/vpn_lease_validation.rs'),
+        Path('state/zk_asset_state.rs'),
+        Path('state/passive_lane_diagnostic_methods.rs'),
+        Path('state/diagnostic_state_generation.rs'),
+        Path('state/autonomous_predecessor_application.rs'),
+        Path('state/state_commit_lock_order_tests.rs'),
+        Path('state/transfer_transcript_tests.rs'),
+        Path('state/block_proof_tests.rs'),
+        Path('state/range_bounds.rs'),
+        Path('state/deserialize_core.rs'),
+        Path('state/deserialize_world.rs'),
+        Path('state/default_oracle.rs'),
     ),
-    Path("crates/iroha_core/src/snapshot.rs"): (
-        Path("snapshot/support_policy_tests.rs"),
-        Path("snapshot/write_roundtrip_tests.rs"),
-        Path("snapshot/reconciliation_generation_tests.rs"),
+    Path('crates/iroha_core/src/snapshot.rs'): (
+        Path('snapshot/support_policy_tests.rs'),
+        Path('snapshot/write_roundtrip_tests.rs'),
+        Path('snapshot/reconciliation_generation_tests.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/evidence.rs"): (
-        Path("evidence/missing_signer_pop_test.rs"),
-        Path("evidence/signature_missing_test.rs"),
-        Path("evidence/roundtrip_matrix_test.rs"),
+    Path('crates/iroha_core/src/sumeragi/evidence.rs'): (
+        Path('evidence/missing_signer_pop_test.rs'),
+        Path('evidence/signature_missing_test.rs'),
+        Path('evidence/roundtrip_matrix_test.rs'),
     ),
-    Path("crates/iroha_p2p/src/network.rs"): (
-        Path("network/handle_update_tests.rs"),
-        Path("network/queue_depth_tests.rs"),
+    Path('crates/iroha_p2p/src/network.rs'): (
+        Path('network/handle_update_tests.rs'),
+        Path('network/queue_depth_tests.rs'),
     ),
-    Path("crates/iroha_p2p/src/peer.rs"): (
-        Path("peer_handshake_config_tests.rs"),
-        Path("peer_state_tests.rs"),
-        Path("peer_consensus_mode_test.rs"),
-        Path("peer_tests.rs"),
+    Path('crates/iroha_p2p/src/peer.rs'): (
+        Path('peer_handshake_config_tests.rs'),
+        Path('peer_state_tests.rs'),
+        Path('peer_consensus_mode_test.rs'),
+        Path('peer_tests.rs'),
     ),
-    Path("crates/irohad/src/main.rs"): (
-        Path("main/runtime_deps.rs"),
-        Path("main_tests/governance_dag_publisher_binding_signer.rs"),
-        Path("main/governance_dag_launcher_tests.rs"),
-        Path("main/runtime_budget_and_config_tests.rs"),
-        Path("main/startup_tail_tests.rs"),
+    Path('crates/irohad/src/main.rs'): (
+        Path('main/runtime_deps.rs'),
+        Path('main_tests/governance_dag_publisher_binding_signer.rs'),
+        Path('main/governance_dag_launcher_tests.rs'),
+        Path('main/runtime_budget_and_config_tests.rs'),
+        Path('main/startup_tail_tests.rs'),
     ),
-    Path("integration_tests/tests/taira_public_localnet.rs"): (
-        Path("taira_public_localnet_config_digest_test.rs"),
+    Path('integration_tests/tests/taira_public_localnet.rs'): (
+        Path('taira_public_localnet_config_digest_test.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/mod.rs"): (
-        Path("tests/mod_authoritative_runtime_gate_01_support.rs"),
-        Path("tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs"),
-        Path("tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs"),
-        Path("tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs"),
-        Path("tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs"),
-        Path("tests/mod_authoritative_runtime_gate_06_source_isolation.rs"),
-        Path("tests/mod_authoritative_runtime_gate_07_wire_bounds.rs"),
-        Path("tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs"),
-        Path("tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs"),
+    Path('crates/iroha_core/src/sumeragi/mod.rs'): (
+        Path('tests/mod_authoritative_runtime_gate_01_support.rs'),
+        Path('tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs'),
+        Path('tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs'),
+        Path('tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs'),
+        Path('tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs'),
+        Path('tests/mod_authoritative_runtime_gate_06_source_isolation.rs'),
+        Path('tests/mod_authoritative_runtime_gate_07_wire_bounds.rs'),
+        Path('tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs'),
+        Path('tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/status.rs"): (
-        Path("status/test_guards.rs"),
+    Path('crates/iroha_core/src/sumeragi/status.rs'): (
+        Path('status/test_guards.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2.rs"): (
-        Path("tests/v2_adapter_activation_context.rs"),
-        Path("tests/v2_adapter_04_wal_recovery.rs"),
-        Path("tests/v2_adapter_04b_lifecycle_startup.rs"),
-        Path("tests/v2_adapter_05_direct_lifecycle.rs"),
-        Path("tests/v2_adapter_01_replay_and_registry.rs"),
-        Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
-        Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2.rs'): (
+        Path('v2_adapter_inline_context_and_genesis_tests.rs'),
+        Path('tests/v2_adapter_activation_context.rs'),
+        Path('v2_adapter_inline_auth_and_producer_recovery_01_tests.rs'),
+        Path('v2_adapter_inline_producer_recovery_02_tests.rs'),
+        Path('v2_adapter_inline_recovered_signing_tests.rs'),
+        Path('tests/v2_adapter_04_wal_recovery.rs'),
+        Path('tests/v2_adapter_04b_lifecycle_startup.rs'),
+        Path('tests/v2_adapter_05_direct_lifecycle.rs'),
+        Path('v2_adapter_inline_wal_and_lock_progress_tests.rs'),
+        Path('tests/v2_adapter_01_replay_and_registry.rs'),
+        Path('tests/v2_adapter_02_view_and_lock_progress.rs'),
+        Path('tests/v2_adapter_03_tc_and_terminal_ingress.rs'),
+        Path('v2_adapter_inline_ingress_authentication_tests.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
-        Path("tests/v2_lifecycle_coordinator_explorer_cases.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs'): (
+        Path('tests/v2_lifecycle_coordinator_explorer_cases.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"): (
-        Path("v2_lifecycle_ledger_store.rs"),
-        Path("v2_lifecycle_ledger_tests.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (
+        Path('v2_lifecycle_launch_tests.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs"): (
-        Path("v2_lifecycle_ledger_tests_durable_recovery_01.rs"),
-        Path("v2_lifecycle_ledger_tests_durable_recovery_02.rs"),
-        Path("v2_lifecycle_ledger_tests_frame_and_store.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs'): (
+        Path('v2_lifecycle_ledger_operations.rs'),
+        Path('v2_lifecycle_ledger_store.rs'),
+        Path('v2_lifecycle_ledger_tests.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"): (
-        Path("tests/v2_lifecycle_projection_cases.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs'): (
+        Path('v2_lifecycle_ledger_tests_durable_recovery_01.rs'),
+        Path('v2_lifecycle_ledger_tests_durable_recovery_02.rs'),
+        Path('v2_lifecycle_ledger_tests_frame_and_store.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"): (
-        Path("v2_lifecycle_replay_authority_certified_body.rs"),
-        Path("v2_lifecycle_replay_authority_payload_projection.rs"),
-        Path("tests/v2_lifecycle_replay_authority_fixtures.rs"),
-        Path("tests/v2_lifecycle_replay_authority_cases.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (
+        Path('tests/v2_lifecycle_projection_cases.rs'),
     ),
-    Path(
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
-    ): (
-        Path("v2_lifecycle_work_registry_validate_recovery_parent.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs'): (
+        Path('v2_lifecycle_replay_authority_certified_serve.rs'),
+        Path('v2_lifecycle_replay_authority_certified_body.rs'),
+        Path('v2_lifecycle_replay_authority_payload_projection.rs'),
+        Path('tests/v2_lifecycle_replay_authority_fixtures.rs'),
+        Path('tests/v2_lifecycle_replay_authority_cases.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
-        Path("v2_lifecycle_work_registry_recovered_wal.rs"),
-        Path("v2_lifecycle_work_registry_validate_recovery.rs"),
-        Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
-        Path("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"),
-        Path("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs"),
-        Path("tests/v2_lifecycle_work_registry_exact_registry_cases.rs"),
-        Path("tests/v2_lifecycle_work_registry_recovery_surface_cases.rs"),
-        Path("tests/v2_lifecycle_work_registry_replay_evidence_cases.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs'): (
+        Path('v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'),
+        Path('v2_lifecycle_work_registry_validate_recovery_parent.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
-        Path("tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs"),
-        Path("tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs'): (
+        Path('v2_lifecycle_work_registry_recovered_wal.rs'),
+        Path('v2_lifecycle_work_registry_validate_recovery.rs'),
+        Path('v2_lifecycle_work_registry_validate_execution.rs'),
+        Path('tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs'),
+        Path('tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs'),
+        Path('tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs'),
+        Path('tests/v2_lifecycle_work_registry_exact_registry_cases.rs'),
+        Path('tests/v2_lifecycle_work_registry_recovery_surface_cases.rs'),
+        Path('tests/v2_lifecycle_work_registry_replay_evidence_cases.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
-        Path("v2_worker/exact_output_rollover_claim.rs"),
-        Path("v2_worker/kura_replica_advert_refresh.rs"),
-        Path("v2_worker/current_lane_output_rollover_claim.rs"),
-        Path("tests/v2_worker_equivocation_and_selected_serve_fixture.rs"),
-        Path("tests/v2_worker_reply_route_cases.rs"),
-        Path("tests/v2_worker_backpressure_cases.rs"),
-        Path("v2_worker/applied_height_handoff_tests.rs"),
-        Path("v2_worker/upstream_reply_route_test.rs"),
-        Path("tests/v2_worker_nonzero_view_restart.rs"),
-        Path("tests/v2_worker_serve_unsealed_cases.rs"),
-        Path("tests/v2_worker_serve_decision_restart_cases.rs"),
-        Path("tests/v2_worker_certified_serve_budget_cases.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_runtime.rs'): (
+        Path('tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs'),
+        Path('v2_runtime_body_pipeline_ownership_cases_tests.rs'),
+        Path('tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_runner.rs"): (
-        Path("v2_runner/height_ingress_bindings.rs"),
-        Path("v2_runner/lifecycle_terminal_recovery.rs"),
-        Path("v2_runner/finalized_output_rollover.rs"),
-        Path("v2_runner/canonical_recovery_ingress.rs"),
-        Path("v2_runner/reply_route_retention.rs"),
-        Path("v2_runner/merge_sidecar_recovery.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_worker.rs'): (
+        Path('v2_worker/exact_output_rollover_claim.rs'),
+        Path('v2_worker/kura_replica_advert_refresh.rs'),
+        Path('v2_worker/current_lane_output_rollover_claim.rs'),
+        Path('tests/v2_worker_equivocation_and_selected_serve_fixture.rs'),
+        Path('tests/v2_worker_reply_route_cases.rs'),
+        Path('tests/v2_worker_backpressure_cases.rs'),
+        Path('v2_worker_output_and_handoff_cases_tests.rs'),
+        Path('v2_worker/applied_height_handoff_tests.rs'),
+        Path('v2_worker/upstream_reply_route_test.rs'),
+        Path('v2_worker_locked_candidate_and_routing_cases_tests.rs'),
+        Path('v2_worker_cold_refanout_and_recovery_cases_tests.rs'),
+        Path('tests/v2_worker_nonzero_view_restart.rs'),
+        Path('v2_worker_io_and_selected_serve_cases_01_tests.rs'),
+        Path('v2_worker_selected_serve_cases_02_tests.rs'),
+        Path('tests/v2_worker_serve_unsealed_cases.rs'),
+        Path('tests/v2_worker_serve_decision_restart_cases.rs'),
+        Path('tests/v2_worker_certified_serve_budget_cases.rs'),
+        Path('tests/v2_worker_productive_orphan_recovery_cases.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_runner_tests.rs"): (
-        Path("tests/v2_runner_unsealed_00.rs"),
-        Path("tests/v2_runner_unsealed_01.rs"),
-        Path("tests/v2_runner_unsealed_02.rs"),
-        Path("tests/v2_runner_upstream_recovery.rs"),
-        Path("tests/v2_runner_lifecycle_startup_order.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_runner.rs'): (
+        Path('v2_runner/height_ingress_bindings.rs'),
+        Path('v2_runner/lifecycle_terminal_recovery.rs'),
+        Path('v2_runner/finalized_output_rollover.rs'),
+        Path('v2_runner/canonical_recovery_ingress.rs'),
+        Path('v2_runner/reply_route_retention.rs'),
+        Path('v2_runner/merge_sidecar_recovery.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): (
-        Path("v2_apply/autonomous_recovery_types.rs"),
-        Path("v2_apply/historical_autonomous_recovery.rs"),
-        Path("v2_apply/reconciliation_authority.rs"),
-        Path("v2_apply/committed_carrier_cleanup.rs"),
-        Path("v2_apply/error_recovery.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_runner_tests.rs'): (
+        Path('tests/v2_runner_unsealed_00.rs'),
+        Path('tests/v2_runner_unsealed_01.rs'),
+        Path('tests/v2_runner_unsealed_02.rs'),
+        Path('tests/v2_runner_upstream_recovery.rs'),
+        Path('tests/v2_runner_lifecycle_startup_order.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"): (
-        Path("tests/reducer_timeout_and_projection.rs"),
-        Path("tests/v2_core_reducer_primitive_projection.rs"),
-        Path("reducer/counterfeit_boundary_capability_test.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_apply.rs'): (
+        Path('v2_apply/autonomous_recovery_types.rs'),
+        Path('v2_apply/historical_autonomous_recovery.rs'),
+        Path('v2_apply/reconciliation_authority.rs'),
+        Path('v2_apply/committed_carrier_cleanup.rs'),
+        Path('v2_apply/error_recovery.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"): (
-        Path("refinement_constructor_test_helpers.rs"),
-        Path("refinement/transition_gate_tail.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_core/reducer.rs'): (
+        Path('tests/reducer_timeout_and_projection.rs'),
+        Path('tests/v2_core_reducer_primitive_projection.rs'),
+        Path('reducer/counterfeit_boundary_capability_test.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs"): (
-        Path("refinement_cases/effect_candidate.rs"),
-        Path("refinement_cases/terminal_body_pipeline.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_core/refinement.rs'): (
+        Path('refinement_constructor_test_helpers.rs'),
+        Path('refinement/transition_gate_tail.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"): (
-        Path("tests/committee_fallback_and_retransmit.rs"),
-        Path("tests/v2_core_view_zero_parent_binding.rs"),
-        Path("tests/empty_replay_resume_test.rs"),
-        Path("tests/v2_core_terminal_transactionality.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs'): (
+        Path('refinement_cases/effect_candidate.rs'),
+        Path('refinement_cases/terminal_body_pipeline.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
-        Path("tests/v2_effects_03_locked_body_and_sidecar.rs"),
-        Path("tests/v2_effects_kura_tip_replay.rs"),
-        Path("tests/v2_effects_01_view_churn_and_runtime_steps.rs"),
-        Path("tests/v2_effects_02_admission_handoffs.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_core/tests.rs'): (
+        Path('tests/committee_fallback_and_retransmit.rs'),
+        Path('tests/v2_core_view_zero_parent_binding.rs'),
+        Path('tests/empty_replay_resume_test.rs'),
+        Path('tests/v2_core_terminal_transactionality.rs'),
     ),
-    Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
-        Path("v2_lane_work/canonical_executed_block_application_repair.rs"),
-        Path("v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs"),
-        Path("v2_lane_work/typed_finality_handoff_tests.rs"),
-        Path("tests/v2_lane_work_native_signing_guard.rs"),
-        Path("v2_lane_work/native_amx_route_and_receipt_tests.rs"),
-        Path("tests/v2_lane_work_observer_role.rs"),
-        Path("tests/v2_lane_work_native_body_recovery.rs"),
-        Path("tests/v2_lane_work_effect_queue.rs"),
-        Path("v2_lane_work/historical_recovery_and_carrier_tests.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (
+        Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
+        Path('v2_effects_certified_response_and_apply_cases_tests.rs'),
+        Path('tests/v2_effects_kura_tip_replay.rs'),
+        Path('tests/v2_effects_01_view_churn_and_runtime_steps.rs'),
+        Path('tests/v2_effects_02_admission_handoffs.rs'),
     ),
-    Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
-        Path("sumeragi_v2_runner/restart_timing_test.rs"),
-        Path("sumeragi_v2_runner/status_validation_helpers.rs"),
+    Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
+        Path('v2_lane_work/canonical_executed_block_application_repair.rs'),
+        Path('v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs'),
+        Path('v2_lane_work/typed_finality_handoff_tests.rs'),
+        Path('tests/v2_lane_work_native_signing_guard.rs'),
+        Path('v2_lane_work/native_amx_route_and_receipt_tests.rs'),
+        Path('tests/v2_lane_work_observer_role.rs'),
+        Path('tests/v2_lane_work_native_body_recovery.rs'),
+        Path('tests/v2_lane_work_effect_queue.rs'),
+        Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
+        Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
     ),
-    Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"): (
-        Path("verus_proofs/production_transition_contracts.rs"),
-        Path("verus_proofs/in_flight_first_release_proofs.rs"),
-        Path("verus_proofs/production_kernel_tail.rs"),
+    Path('integration_tests/tests/sumeragi_v2_runner.rs'): (
+        Path('sumeragi_v2_runner/restart_timing_test.rs'),
+        Path('sumeragi_v2_runner/status_validation_helpers.rs'),
+    ),
+    Path('crates/iroha_sumeragi_core/src/verus_proofs.rs'): (
+        Path('verus_proofs/production_transition_contracts.rs'),
+        Path('verus_proofs/in_flight_first_release_proofs.rs'),
+        Path('verus_proofs/production_kernel_tail.rs'),
     ),
 }
 
@@ -382,10 +403,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 41
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 42
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 4
 assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 4
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 37
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 38
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
@@ -1878,10 +1899,10 @@ def test_externalized_timeout_capacity_semantics_survive_digest_refresh(
     assert any(expected_error in error for error in errors), errors
 
 
-def test_replayed_proposal_owner_semantics_survive_digest_refresh(
+def test_recovered_lifecycle_proposal_owner_semantics_survive_digest_refresh(
     tmp_path: Path,
 ) -> None:
-    """The externalized replay-owner regression remains a semantic seal."""
+    """The opaque recovered-attempt regression remains a semantic seal."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -1902,7 +1923,7 @@ def test_replayed_proposal_owner_semantics_survive_digest_refresh(
         / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
     )
     test_name = (
-        "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner"
+        "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner"
     )
     mutate_rust_item_source(
         module,
@@ -1923,7 +1944,7 @@ def test_replayed_proposal_owner_semantics_survive_digest_refresh(
     )
 
     assert any(
-        "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles"
+        "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions"
         in error
         for error in errors
     ), errors
@@ -3095,6 +3116,22 @@ def test_production_trace_certificate_extracts_every_required_action() -> None:
             "revalidate_lane_reservation_startup_reconciliation_receipt",
         ),
         (
+            "run_non_pending_lifecycle_loop",
+            "construct_after_pending_tip_application_recovery",
+        ),
+        (
+            "reconcile_pending_lane_startup",
+            "reconcile_lifecycle_terminal_outcomes_before_queue_planning",
+        ),
+        (
+            "run_pending_kura_lifecycle_height",
+            "pending.prepare_lane_recovery",
+        ),
+        (
+            "prepare_lane_recovery",
+            "lane_work.install_lane_drain_queue",
+        ),
+        (
             "complete_lane_reservation_startup_reconciliation",
             "receipt.initial_snapshot",
         ),
@@ -3203,6 +3240,53 @@ def test_production_trace_certificate_rejects_roster_gated_lifecycle_process_gen
     assert "configured-role lifecycle process-generation claim" in message
     assert "contains forbidden exact code tokens" in message
     assert "local_validator_index" in message
+
+
+def test_production_trace_certificate_rejects_modular_lifecycle_branch_handoff_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bootstrap owner must hand each recovered mode to its typed child."""
+
+    module = load_checker()
+    bindings = [
+        copy.deepcopy(binding)
+        for binding in module.PRODUCTION_TRACE_EXTRACTION_BINDINGS
+    ]
+    binding = next(
+        candidate
+        for candidate in bindings
+        if candidate["id"] == "startup_snapshot_recovery_authorization"
+    )
+    handoff = next(
+        source
+        for source in binding["supporting_sources"]
+        if source["role"] == "runner lifecycle process-generation branch handoff"
+    )
+    source_path = ROOT_DIR / handoff["path"]
+    source = source_path.read_text(encoding="utf-8")
+    extraction_errors: list[str] = []
+    item = module._production_trace_unique_function(
+        root_dir=ROOT_DIR,
+        relative=handoff["path"],
+        symbol=handoff["symbol"],
+        impl_name=handoff["impl"],
+        errors=extraction_errors,
+    )
+    assert extraction_errors == []
+    assert item is not None
+    old = "lifecycle_pending_kura::run_pending_kura_lifecycle_height("
+    assert item.source.count(old) == 1
+    mutated_path = tmp_path / "missing-pending-lifecycle-branch.rs"
+    mutated_path.write_text(
+        source.replace(item.source, item.source.replace(old, "drop(", 1), 1),
+        encoding="utf-8",
+    )
+    handoff["path"] = str(mutated_path.resolve())
+    monkeypatch.setattr(module, "PRODUCTION_TRACE_EXTRACTION_BINDINGS", tuple(bindings))
+
+    with pytest.raises(ValueError, match="branch handoff"):
+        module._production_trace_extraction_source_snapshot()
 
 
 @pytest.mark.parametrize(
@@ -4681,3 +4765,104 @@ def _assert_commit_import_release_or_stale_artifact(
             f"Commit-import release theorem {symbol} must state only" in error
             for error in errors
         ), errors
+
+
+def test_successor_run_inner_parser_rejects_neighbor_lookalike(
+    tmp_path: Path,
+) -> None:
+    """Successor checks may consume only the parsed `run_inner` item."""
+
+    module = load_checker()
+    for relative in (
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "crates/iroha_core/src/sumeragi/status.rs",
+        "crates/iroha_core/src/sumeragi/v2.rs",
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_apply_tests.rs",
+        "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_context.rs",
+        "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+        "crates/iroha_core/src/sumeragi/safety_wal.rs",
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/preactivation_ingress.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "crates/iroha_core/src/sumeragi/v2_transport.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "crates/iroha_core/src/state.rs",
+        "crates/iroha_core/src/kura.rs",
+        "scripts/run_sumeragi_v2_release_gates.sh",
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+
+    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    source = runner.read_text(encoding="utf-8")
+    run_inner_items = module.rust_items(source, "run_inner")
+    assert len(run_inner_items) == 1
+    run_inner = run_inner_items[0]
+    owner_binding = (
+        "let pending_successor_activation = recovered_successor_activation\n"
+        "        .map(|authority| PendingSuccessorActivation::recovered(authority, &common_config.key_pair))\n"
+        "        .transpose()?;"
+    )
+    assert run_inner.source.count(owner_binding) == 1
+    weakened = run_inner.source.replace(
+        owner_binding,
+        "let pending_successor_activation = None;",
+        1,
+    )
+    neighboring_lookalike = (
+        "\n\nfn parser_only_run_inner_lookalike() {\n"
+        f"    {owner_binding}\n"
+        "    let _ = &pending_successor_activation;\n"
+        "}\n"
+    )
+    assert source.count(run_inner.source) == 1
+    runner.write_text(
+        source.replace(
+            run_inner.source,
+            weakened + neighboring_lookalike,
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_production_source_fidelity_errors(tmp_path)
+    assert any(
+        "run_inner recovery ownership omits production refinement tokens"
+        in error
+        for error in errors
+    ), errors

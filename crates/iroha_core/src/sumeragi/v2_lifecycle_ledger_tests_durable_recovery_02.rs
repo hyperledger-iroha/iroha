@@ -383,7 +383,7 @@
         }
 
         #[test]
-        fn fresh_certified_serve_publishes_exact_ledger_and_shared_pair_beside_fetch() {
+        fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
             let fixture = RecoveryFixture::new("fresh-serve-owner", 0x81);
             let body_directory = TempDir::new().expect("temporary fresh Serve body store");
             let mut body_store = fixture.open_store(&body_directory);
@@ -404,6 +404,77 @@
             let mut owner = cut
                 .open_owner_for_test(payload_store, payloads)
                 .expect("open fresh Serve production owner");
+            let context = fixture.verified.context();
+            let round = wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 4,
+            };
+            let subject = wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new([
+                    0x82, 0xA1,
+                ])),
+                payload_hash: Hash::new([0x82, 0xA2]),
+            };
+            let execution_commitment =
+                wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                    Hash::new([0x82, 0xB1]),
+                    Hash::new([0x82, 0xB2]),
+                    Hash::new([0x82, 0xB3]),
+                    1,
+                    Hash::new([0x82, 0xB4]),
+                );
+            let mut vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject,
+                execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            vote.signature = Signature::new(
+                fixture.keys[0].private_key(),
+                &crate::sumeragi::v2::SignRequest::Vote(vote.clone()).signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            let broadcast = crate::sumeragi::v2::AdapterEffect::Broadcast(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote)),
+            );
+            let ownership = crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&broadcast),
+                vec![
+                    crate::sumeragi::v2_runtime::RuntimeEffectOwnership::fresh_for_test(
+                        EventTag::new(context.height, round.view, Generation::new(1)),
+                        0x82,
+                    ),
+                ],
+            )
+            .expect("bind unrelated live Broadcast")
+            .pop()
+            .expect("one unrelated live Broadcast owner");
+            let pending = ownership
+                .pending_adapter_effect_binding(&broadcast)
+                .expect("mint unrelated live Broadcast binding");
+            assert!(matches!(
+                owner.coordinator.admit_concrete_adapter_effect(
+                    &mut owner.registry,
+                    &fixture.verified,
+                    broadcast,
+                    pending,
+                ),
+                super::super::super::concrete_admission::AdapterEffectAdmissionTransaction::Admitted(
+                    super::super::super::AdmissionDecision::Admitted { ordinal: 2, .. }
+                )
+            ));
+            assert!(
+                owner
+                    .registry
+                    .registry_mut()
+                    .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
+            );
             let request = fixture.authenticated_serve_request(1, 0x83, 3);
             let target =
                 super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
@@ -416,8 +487,8 @@
             assert!(matches!(
                 outcome.decision(),
                 Some(super::super::super::AdmissionDecision::Admitted {
-                    ordinal: 2,
-                    producer_turn_ordinal: Some(3),
+                    ordinal: 3,
+                    producer_turn_ordinal: Some(4),
                     ..
                 })
             ));
@@ -446,7 +517,7 @@
                 owner
                     .registry
                     .registry_mut()
-                    .exactly_covers_recovered_ready_work(&owner.coordinator)
+                    .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator)
             );
             let store = owner
                 .coordinator
@@ -469,7 +540,7 @@
                 owner.admit_selected_certified_serve(retry_target, &fixture.keys[0], &request);
             assert!(matches!(
                 retry.decision(),
-                Some(super::super::super::AdmissionDecision::Retry { ordinal: 2, .. })
+                Some(super::super::super::AdmissionDecision::Retry { ordinal: 3, .. })
             ));
             assert!(retry.into_safe_continuation().is_ok());
             assert_eq!(owner.live_fetch_count_for_test(), 1);

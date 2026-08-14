@@ -3620,6 +3620,66 @@ impl V2LaneWorkAdapter {
         Ok(adapter)
     }
 
+    /// Open the exact unactivated lane owner used by pending-Kura lifecycle tests.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn pending_kura_lifecycle_fixture_for_test(
+        context: wire::HeightContext,
+        local_peer: PeerId,
+        key_pair: KeyPair,
+        state: Arc<State>,
+        kura: Arc<Kura>,
+        expected: super::v2_recovery::PendingKuraApply,
+        output_guard: Arc<ConsensusOutputGuard>,
+        exact_output_handoff_owner: DurableExactOutputTransportOwner,
+    ) -> Result<Self, V2LaneWorkError> {
+        let nonzero = NonZeroUsize::new(8).expect("non-zero pending Kura lane fixture bound");
+        let limits = V2LaneWorkLimits::new(
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            nonzero,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            MergeSidecarLimits::defaults(),
+            MergeSigningGuardLimits::defaults(),
+            NativeAmxSigningGuardLimits::new(
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            )
+            .expect("default Native AMX signing limits"),
+        );
+        Self::new_with_output_guard_and_transport_for_test(
+            context,
+            local_peer,
+            key_pair,
+            false,
+            state,
+            kura,
+            limits,
+            None,
+            Some(expected),
+            output_guard,
+            exact_output_handoff_owner,
+            None,
+            None,
+        )
+    }
+
     /// Open one production adapter and retain process-local sidecar ownership
     /// from the immediately preceding height.
     #[allow(clippy::too_many_arguments)]

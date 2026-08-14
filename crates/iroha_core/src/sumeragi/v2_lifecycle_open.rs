@@ -5,14 +5,17 @@ use std::{
     path::Path,
 };
 
+#[cfg(test)]
 use iroha_config::parameters::actual::SumeragiV2Config;
 use thiserror::Error;
 
+#[cfg(test)]
+use super::authority;
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
     DurablePayloadReference, LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey,
     LifecycleStage, LifecycleStageKind, LifecycleState, LifecycleWorkClass, TerminalOutcome,
-    authority::{self, AuthenticatedEpisodeAuthority},
+    authority::AuthenticatedEpisodeAuthority,
     ledger::{
         LifecycleLedgerError, LifecycleLedgerRecordV1, LifecycleLedgerStoreV1, LifecycleLedgerV1,
         RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,

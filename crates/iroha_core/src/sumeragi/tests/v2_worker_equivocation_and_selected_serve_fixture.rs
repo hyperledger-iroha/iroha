@@ -351,7 +351,10 @@
             let late_passive_fetch = match mode {
                 SelectedServeTimeoutRecoveryMode::TimeoutRecovery => {
                     executor
-                        .arm_live_clocks(started_at)
+                        .arm_live_clocks(
+                            crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                            started_at,
+                        )
                         .expect("arm selected-Serve timeout clocks");
                     let timeout_owner = executor
                         .freeze_due_timeout_owner_for_test(Instant::now())
@@ -366,7 +369,10 @@
                 SelectedServeTimeoutRecoveryMode::LatePassiveFetch => {
                     let late_dispatch_at = Instant::now();
                     executor
-                        .arm_live_clocks(late_dispatch_at)
+                        .arm_live_clocks(
+                            crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                            late_dispatch_at,
+                        )
                         .expect("arm non-due late-passive-Fetch clocks");
                     let (body, payload, mut proposal) = proposal_body_and_payload(&context, &keys);
                     let proposer_index = usize::try_from(proposal.proposer)
@@ -541,26 +547,21 @@
                     self.executor.remaining_completion_capacity() != 0,
                     barrier.scheduler_ordinal(),
                 )?;
-            if let Some(witness) = self
+            let predecessor = self
                 .executor
-                .exact_serve_predecessor_episode_witness(
+                .exact_serve_predecessor_observation(
                     Instant::now(),
                     barrier.scheduler_ordinal(),
                     completion_evidence,
                 )
-                .map_err(|error| error.to_string())?
-            {
-                let _ = self
-                    .services
-                    .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;
-            }
-            let claimed = self
-                .services
-                .claim_certified_serve_runtime_episode(barrier)?;
-            if !claimed {
+                .map_err(|error| error.to_string())?;
+            if !predecessor.should_open_predecessor_admission() {
                 self.assert_missing_proposal_serve_selected();
                 return Ok(false);
             }
+            let predecessor_admission = self
+                .services
+                .open_certified_serve_predecessor_admission(barrier)?;
             let _ = self
                 .services
                 .drain_exact_serve_runtime_predecessor(
@@ -574,23 +575,18 @@
                     self.executor.remaining_completion_capacity() != 0,
                     barrier.scheduler_ordinal(),
                 )?;
-            let predecessor_witness = self
+            let predecessor = self
                 .executor
-                .exact_serve_predecessor_episode_witness(
+                .exact_serve_predecessor_observation(
                     Instant::now(),
                     barrier.scheduler_ordinal(),
                     completion_evidence,
                 )
                 .map_err(|error| error.to_string())?;
-            if let Some(witness) = predecessor_witness {
-                let _ = self
-                    .services
-                    .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;
-            }
-            if predecessor_witness.is_some()
+            if predecessor.has_runnable_predecessor()
                 && self
                     .services
-                    .certified_serve_runtime_predecessor_capacity_available(barrier)?
+                    .certified_serve_predecessor_capacity_available(barrier)?
             {
                 self.executor
                     .set_ingress_physical_cut(self.ingress.next_physical_admission_ordinal())
@@ -606,22 +602,16 @@
                     self.executor.remaining_completion_capacity() != 0,
                     barrier.scheduler_ordinal(),
                 )?;
-            let predecessor_witness = self
+            let predecessor = self
                 .executor
-                .exact_serve_predecessor_episode_witness(
+                .exact_serve_predecessor_observation(
                     Instant::now(),
                     barrier.scheduler_ordinal(),
                     completion_evidence,
                 )
                 .map_err(|error| error.to_string())?;
-            if let Some(witness) = predecessor_witness {
-                let _ = self
-                    .services
-                    .observe_certified_serve_predecessor_episode_witness(barrier, witness)?;
-            }
-            let older_predecessor_remains = predecessor_witness.is_some();
-            self.services
-                .finish_certified_serve_runtime_episode_turn(barrier, older_predecessor_remains)?;
+            let _older_predecessor_remains = predecessor.has_runnable_predecessor();
+            predecessor_admission.finish()?;
             self.assert_missing_proposal_serve_selected();
             Ok(true)
         }
@@ -639,12 +629,12 @@
 
             assert!(
                 self.service_exact_serve_runtime_prefix()
-                    .expect("complete the initially selected Serve predecessor episode")
+                    .expect("complete the initially selected Serve predecessor admission")
             );
             assert!(
                 !self
                     .service_exact_serve_runtime_prefix()
-                    .expect("the passive Fetch alone cannot reopen the completed episode"),
+                    .expect("the passive Fetch alone cannot open predecessor admission"),
                 "transport-passive Fetch work is not runnable reducer progress"
             );
 
@@ -661,7 +651,7 @@
             );
             assert!(
                 self.service_exact_serve_runtime_prefix()
-                    .expect("the late BodyAvailable successor reopens the Serve episode")
+                    .expect("the late BodyAvailable successor opens predecessor admission")
             );
 
             let store_task = match self.command_rx.try_recv() {
@@ -677,7 +667,7 @@
             assert!(
                 !self
                     .service_exact_serve_runtime_prefix()
-                    .expect("an incomplete Store cannot reopen the completed episode"),
+                    .expect("an incomplete Store cannot open predecessor admission"),
                 "active Store work remains passive until its tracked completion exists"
             );
             let stored = late
@@ -712,7 +702,7 @@
             assert!(
                 !self
                     .service_exact_serve_runtime_prefix()
-                    .expect("an incomplete Validate cannot reopen the completed episode"),
+                    .expect("an incomplete Validate cannot open predecessor admission"),
                 "active Validate work remains passive until its tracked completion exists"
             );
             let validated = late

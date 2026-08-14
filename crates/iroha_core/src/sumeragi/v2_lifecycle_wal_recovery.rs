@@ -1469,6 +1469,36 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
 
+    /// Rejoin this standalone carrier to one exact in-memory ledger frame.
+    pub(super) fn validates_in_ledger(
+        &self,
+        verified: &VerifiedHeightContext,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        self.projection.is_exact(verified)
+            && self
+                .projection
+                .exactly_matches_ledger_at(ledger, self.ordinal)
+            && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
+    }
+
+    /// Rejoin an advanced control Sign and its exact live Broadcast child.
+    pub(super) fn validates_signed_broadcast_in_ledger(
+        &self,
+        verified: &VerifiedHeightContext,
+        broadcast: &RecoveredLifecycleSignedBroadcastProjectionV1,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        child_ordinal: u128,
+    ) -> bool {
+        ledger
+            .authenticate_recovered_control_signed_broadcast(verified, &self.projection)
+            .is_ok_and(|(observed, parent_ordinal, observed_child)| {
+                parent_ordinal == self.ordinal
+                    && observed_child == child_ordinal
+                    && observed.exactly_matches(broadcast)
+            })
+    }
+
     /// Compare the current Ready record, metadata, indexes, geometry, and carrier.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -2327,6 +2357,23 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
         self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
 
+    /// Rejoin the installed carrier to its verified WAL replay projection.
+    pub(super) fn validates(&self, verified: &VerifiedHeightContext) -> bool {
+        self.projection.is_exact(verified) && self.is_exact()
+    }
+
+    /// Rejoin this standalone Fetch carrier to one exact in-memory ledger frame.
+    pub(super) fn validates_in_ledger(
+        &self,
+        verified: &VerifiedHeightContext,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        self.validates(verified)
+            && self
+                .projection
+                .exactly_matches_ledger_at(ledger, self.ordinal)
+    }
+
     /// Return the immutable causal owner while retaining the complete carrier.
     pub(super) const fn causal_root(&self) -> super::CausalRoot {
         self.owner.causal_root()
@@ -2366,6 +2413,18 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
             self.ordinal,
             store_projection,
         ) && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
+    }
+
+    /// Rejoin the retained Fetch and Store against one exact in-memory ledger prefix.
+    pub(super) fn validates_recovered_store_in_ledger(
+        &self,
+        store_projection: &RecoveredDecisionFetchStoreProjectionV1,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        ledger
+            .authenticate_recovered_decision_fetch_store(&self.projection, store_projection)
+            .is_ok_and(|(fetch_ordinal, _)| fetch_ordinal == self.ordinal)
+            && self.validates_at(self.owner, self.ordinal, self.slot, self.digest)
     }
 
     /// Compare the current Ready coordinator record and carrier.
@@ -2768,6 +2827,15 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
     /// Borrow the authenticated repair for idempotent post-fsync verification.
     pub(super) const fn repair(&self) -> &AuthenticatedWalVoteLifecycleRepair {
         &self.repair
+    }
+
+    /// Rejoin this repaired pair to an unchanged in-memory ledger lineage.
+    pub(super) fn validates_in_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
+        ledger
+            .stage_authenticated_wal_vote_repair(&self.repair)
+            .is_ok_and(|(staged, child_ordinal, changed)| {
+                !changed && staged == *ledger && child_ordinal == self.child_ordinal()
+            })
     }
 
     /// Match one validation to the retained concrete Validate-to-Sign pair.

@@ -690,8 +690,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 436:
-        errors.append("internal release-regression seal must contain exactly 436 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 437:
+        errors.append("internal release-regression seal must contain exactly 437 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -806,7 +806,11 @@ def _production_liveness_release_inventory_errors(
             successor_adapter_path.relative_to(repo_root).as_posix(),
             errors,
             "successor parent-binding regression source",
-            expanded_components=("tests/v2_adapter_activation_context.rs",),
+            expanded_components=(
+                "tests/v2_adapter_activation_context.rs",
+                "v2_adapter_inline_auth_and_producer_recovery_01_tests.rs",
+                "v2_adapter_inline_ingress_authentication_tests.rs",
+            ),
         )
         for test_name, expected_sha256 in _SUCCESSOR_PARENT_BINDING_TEST_SHA256.items():
             successor_test = _require_rust_item(
@@ -1938,21 +1942,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 855 tests across 40 modules.\n"
+            "current\ninventory to 856 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 855-test, 40-module inventory. The complete source-sealed\n"
+            "current 856-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 855 exact tests across 40 modules and "
+            "current\nsource-bound inventory to 856 exact tests across 40 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

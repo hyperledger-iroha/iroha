@@ -189,7 +189,7 @@
             let DurableValidateBody {
                 effect, pending, ..
             } = validate;
-            let pending = ConcreteLifecycleWork::from_exact(effect, pending)
+            let pending = ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
                 .expect("rebuild exact pending Validate work");
             assert!(
                 fixture
@@ -1158,6 +1158,41 @@
             coordinator.records[&child_ordinal].stage.kind(),
             LifecycleStageKind::SignCommitVote
         );
+        assert!(
+            holder
+                .registry_for_test()
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        let exact_replay = coordinator.durable_records[&child_ordinal]
+            .replay_authority
+            .clone();
+        let foreign_replay = exact_replay
+            .with_foreign_origin_generation_for_test()
+            .expect("live WAL Sign replay supports a foreign-generation negative fixture");
+        let child = &coordinator.records[&child_ordinal];
+        let child_metadata = &coordinator.durable_records[&child_ordinal];
+        assert!(foreign_replay.structurally_matches_record(
+            coordinator.active_context,
+            child.key,
+            child.work_class,
+            child.stage,
+            child_metadata.payload,
+        ));
+        coordinator
+            .durable_records
+            .get_mut(&child_ordinal)
+            .expect("live Sign metadata")
+            .replay_authority = foreign_replay;
+        assert!(
+            !holder
+                .registry_for_test()
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator
+            .durable_records
+            .get_mut(&child_ordinal)
+            .expect("live Sign metadata")
+            .replay_authority = exact_replay;
         assert!(coordinator.active_lease.is_none());
         assert!(adapter.signature_fence_is_active());
         assert!(matches!(
@@ -1676,8 +1711,11 @@
             let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = incumbent.kind else {
                 unreachable!("wrong-carrier fixture starts with durable Validate")
             };
-            let pending = ConcreteLifecycleWork::from_exact(validate.effect, validate.pending)
-                .expect("rebuild pending Validate wrong carrier");
+            let pending = ConcreteLifecycleWork::from_inert_fixture_for_test(
+                validate.effect,
+                validate.pending,
+            )
+            .expect("rebuild pending Validate wrong carrier");
             assert!(
                 holder
                     .registry_for_test_mut()

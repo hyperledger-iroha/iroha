@@ -18,9 +18,9 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         proposer: local,
         subject: body_subject,
         manifest: manifest.clone(),
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: Vec::new(),
     };
     let (_, validated) = validated_receipts_for_manifest(&context, &proposal.manifest);
@@ -190,12 +190,8 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         )
         .expect("bind exact reducer body lookup to the preview/store owner");
 
-    let foreign_durable = DurableBodyReceipt::for_test(
-        context.id(),
-        round,
-        subject(0xD7),
-        HashOf::new(&manifest),
-    );
+    let foreign_durable =
+        DurableBodyReceipt::for_test(context.id(), round, subject(0xD7), HashOf::new(&manifest));
     let foreign_body = ValidatedBodyReceipt::for_test(foreign_durable);
     assert!(
         RecoveredLifecycleNextVoteBodyAuthorityV1::for_test(
@@ -420,9 +416,9 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         proposer: local,
         subject,
         manifest: manifest.clone(),
-        justification: wire::ProposalJustification::ParentCommit(
-            wire::ParentCommitJustification { certificate: None },
-        ),
+        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
+            certificate: None,
+        }),
         signature: Vec::new(),
     };
     let commitment = execution_commitment(0xD6);
@@ -435,15 +431,14 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         signer: local,
         signature: Vec::new(),
     };
-    let RecoveredAdapterStartup { adapter, effects } =
-        write_and_reopen_authenticated_wal_startup(
-            &directory,
-            &context,
-            &proofs,
-            local,
-            [0xD6; 32],
-            vec![WalRecordV2::ProposalIntent(proposal.clone())],
-        );
+    let RecoveredAdapterStartup { adapter, effects } = write_and_reopen_authenticated_wal_startup(
+        &directory,
+        &context,
+        &proofs,
+        local,
+        [0xD6; 32],
+        vec![WalRecordV2::ProposalIntent(proposal.clone())],
+    );
     let RecoveredAdapterStartup {
         adapter: cold_adapter,
         effects: cold_effects,
@@ -462,7 +457,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     let [AdapterEffect::Sign { tag, request }] = effects.as_slice() else {
         panic!("recovered Proposal/Prepare FIFO must expose the Proposal Sign first")
     };
-    assert_eq!(request, &SignRequest::Proposal(proposal));
+    assert_eq!(request, &SignRequest::Proposal(proposal.clone()));
     let tag = *tag;
     let request = request.clone();
     let prepare_identity = cold_adapter
@@ -581,11 +576,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
             .as_ref()
             .is_some_and(|output| output.matches_broadcast(&sealed_broadcast))
     );
-    assert!(sealed_next_sign.exactly_matches(
-        prepare_identity,
-        &expected_next_sign,
-        &validated,
-    ));
+    assert!(sealed_next_sign.exactly_matches(prepare_identity, &expected_next_sign, &validated,));
     let cold_adapter_authority =
         RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1::from_recovered_wal(
             super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignBroadcastProjectionPermitV1::for_test(),
@@ -595,10 +586,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         .expect("sealed cold pair retains the exact adapter replay relation");
     drop(sealed_next_sign);
     let cold_startup = cold_startup
-        .advance_recovered_lifecycle_signed_broadcast_and_sign(
-            &verified,
-            cold_adapter_authority,
-        )
+        .advance_recovered_lifecycle_signed_broadcast_and_sign(&verified, cold_adapter_authority)
         .expect("sealed cold pair advances the retained original startup");
     let ProductionLifecycleAdapterStartupStateV1::Recovered {
         adapter: advanced_cold_adapter,
@@ -744,9 +732,9 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
             reservation,
         ) => reservation.abort_before_publication(),
-        super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
-            _,
-        ) => panic!("empty exact-output corridor must retain the complete Proposal batch"),
+        super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+            panic!("empty exact-output corridor must retain the complete Proposal batch")
+        }
     };
     let mut output = match services
         .capture_recovered_lifecycle_proposal_exact_output(proposal_output)
@@ -755,9 +743,9 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(
             reservation,
         ) => reservation,
-        super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(
-            _,
-        ) => panic!("retry against the unchanged empty corridor must remain reservable"),
+        super::super::v2_worker::RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(_) => {
+            panic!("retry against the unchanged empty corridor must remain reservable")
+        }
     };
     let wal_permit = output
         .prepare_wal_append_permit()

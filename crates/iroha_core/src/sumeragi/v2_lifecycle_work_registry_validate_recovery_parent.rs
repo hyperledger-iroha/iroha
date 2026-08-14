@@ -485,6 +485,11 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             .registry_for_test()
             .attest_ready_recovered_lifecycle_sign(coordinator, unrelated_ordinal)
             .expect("unrelated scheduler fixture Sign attests independently");
+        assert!(
+            registry
+                .registry_for_test()
+                .exactly_covers_all_live_work(verified, coordinator)
+        );
         (
             registry,
             broadcast_ordinal,

@@ -2,7 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     sync::{Mutex, atomic::AtomicUsize},
 };
 

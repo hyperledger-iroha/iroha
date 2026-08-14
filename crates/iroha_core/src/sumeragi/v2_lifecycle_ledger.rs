@@ -1648,8 +1648,8 @@ pub(in crate::sumeragi) struct CompleteTipSuccessorOwnerBindErrorV1;
 ///
 /// The sole launch method consumes this seal into the existing lifecycle
 /// launch transaction and retains retirement in another opaque wrapper. The
-/// runner cutover must retain that wrapper through clock/ingress arming and
-/// publish status only through a dedicated typed CompleteTip activation tail.
+/// lifecycle runner retains that wrapper through clock/ingress arming and
+/// publishes status only through a dedicated typed CompleteTip activation tail.
 /// No generic owner, adapter, store, frame, registry, or activation parts are
 /// exposed here.
 #[must_use = "the bound CompleteTip successor owner must remain sealed until launch"]
@@ -1698,6 +1698,28 @@ pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 
 }
 
 impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    /// Borrow the sealed H+1 executor and services while ingress stays closed.
+    ///
+    /// The retired-H authority remains inside this wrapper for the whole
+    /// transaction. The callback therefore cannot detach the generic launched
+    /// owner or publish H+1 before the dedicated CompleteTip activation.
+    #[allow(dead_code, clippy::type_complexity)]
+    pub(in crate::sumeragi) fn with_runner_setup<R, E>(
+        &mut self,
+        runner: &mut super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1,
+        operation: impl FnOnce(
+            &mut super::super::v2_effects::V2EffectExecutor<
+                super::super::v2_runtime::SerializedV2Runtime,
+            >,
+            &mut super::super::v2_worker::ProductionV2Services,
+        ) -> Result<R, E>,
+    ) -> Result<R, E>
+    where
+        E: From<super::launch::ProductionLifecyclePreActivationErrorV1>,
+    {
+        self.launched.with_runner_setup(runner, operation)
+    }
+
     /// Temporarily recover canonical bodies without separating retired H from H+1.
     #[allow(dead_code, clippy::type_complexity, clippy::result_large_err)]
     pub(in crate::sumeragi) fn with_canonical_body_recovery_ingress<R, E>(
@@ -1717,6 +1739,23 @@ impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
     {
         self.launched
             .with_complete_tip_canonical_body_recovery_ingress(runner, activation, operation)
+    }
+
+    /// Consume the sealed H/H+1 stack during orderly operator shutdown.
+    ///
+    /// The successor is never published and the retired predecessor evidence
+    /// remains durable for cold restart. Both halves are consumed together so
+    /// no generic launched owner can outlive the CompleteTip join.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_clean_shutdown(
+        self,
+        runner: super::super::v2_runner::ProductionLifecycleCompleteTipRunnerActivationV1,
+    ) -> Result<(), super::launch::ProductionLifecycleShutdownErrorV1> {
+        let Self {
+            launched,
+            retirement,
+        } = self;
+        launched.into_complete_tip_clean_shutdown(runner, retirement)
     }
 
     /// Bind recovered local-Proposal ownership before consuming the H/H+1 join.
@@ -2143,8 +2182,8 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
     /// consumes every Fetch candidate; its concrete peers enter the fresh
     /// registry before coordinator preparation. The exact registry/coordinator
     /// join is checked before either durable open publication occurs.
-    // The runner cutover is deliberately separate; keep this sole production
-    // constructor present until that owner is wired into startup.
+    // The lifecycle factory reaches this sole constructor only after its
+    // authenticated storage, registry, and replay joins succeed.
     #[allow(dead_code, clippy::result_large_err, clippy::too_many_arguments)]
     pub(super) fn open_production_owner(
         self,
@@ -3018,7 +3057,23 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Apply LedgerV1 open failed",
                 )
             })?;
-        let (successor, _apply_ordinal, _changed) = predecessor
+        let fetch_is_present = predecessor
+            .records
+            .iter()
+            .any(|record| projection.fetch().names_record(record));
+        let staged_predecessor = if fetch_is_present {
+            predecessor.clone()
+        } else {
+            predecessor
+                .stage_authenticated_wal_decision_fetch(projection.fetch())
+                .map_err(|_error| {
+                    ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                        "recovered Decision Apply Fetch parent is not exact",
+                    )
+                })?
+                .0
+        };
+        let (successor, _apply_ordinal, _changed) = staged_predecessor
             .stage_recovered_decision_apply(&projection)
             .map_err(|_error| {
                 ProductionRecoveredDecisionApplyStartupErrorV1::new(
@@ -3328,6 +3383,41 @@ trait RecoveredDecisionApplyStageProjectionV1 {
     ) -> bool;
 
     fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1;
+}
+
+/// Borrowed comparison-only projection of one installed recovered Apply carrier.
+struct RecoveredDecisionApplyCarrierLedgerProjectionV1<'a> {
+    fetch: &'a AuthenticatedRecoveredWalDecisionFetchProjection,
+    lineage: &'a RecoveredDecisionApplyCandidateLineageV1,
+}
+
+impl RecoveredDecisionApplyStageProjectionV1
+    for RecoveredDecisionApplyCarrierLedgerProjectionV1<'_>
+{
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+        self.fetch.belongs_to_context(context)
+    }
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch.names_record(record)
+    }
+
+    fn exactly_matches_live_fetch(&self, fetch: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch.exactly_matches_record(fetch)
+    }
+
+    fn exactly_matches_advanced_fetch(
+        &self,
+        fetch: &LifecycleLedgerRecordV1,
+        store_ordinal: u128,
+    ) -> bool {
+        self.fetch
+            .exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+    }
+
+    fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+        self.lineage
+    }
 }
 
 impl RecoveredDecisionApplyStageProjectionV1

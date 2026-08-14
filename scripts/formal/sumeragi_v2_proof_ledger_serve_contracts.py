@@ -1486,6 +1486,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_STRUCT_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
+    "prepare_leader_wire_launch": "e312bc9b0e4a97d11a8d195875c476e9bb37fa988551ecdf2cda4a536495df60",
     "producer_parent_replay_source_for_stage": (
         "de61146d932b8f0f65a799f8102e83013fce7f875e82d591b22528c75caab41f"
     ),
@@ -1511,7 +1512,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "e91ac22cf354ee698ce40c2d49b423fedd0bb054728337b14d43940e43802600"
+        "077c4e35cad9015abafc3bf41988b1852ff71a91ae240f772e1052cd859c66ae"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1645,8 +1646,9 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
 }
-_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": "5b6a90315ff3a09b798bf3dff06dc6fabd22698f8a418a7e03e83e9241d26dc4",
+_SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
+    "launch": "1d04be799f92a3021f746d98af1b4fa1d025c9951c14531a6df6633f768dd974",
+    "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
     "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (

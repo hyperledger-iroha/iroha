@@ -92,7 +92,7 @@ def test_proof_ledger_tests_have_unique_reviewed_component_providers() -> None:
             "sumeragi_v2_proof_ledger_async_source_cases.py",
         "test_leader_wire_physical_ingress_rejects_semantic_mutations":
             "sumeragi_v2_proof_ledger_async_source_cases.py",
-        "test_exact_serve_runtime_episode_rejects_semantic_mutations":
+        "test_direct_serve_predecessor_rejects_semantic_mutations":
             "sumeragi_v2_proof_ledger_async_source_cases.py",
         "test_local_runner_service_contract_rejects_production_loop_mutations":
             "sumeragi_v2_proof_ledger_async_fairness_cases.py",
@@ -169,7 +169,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 28
+    assert len(filenames) == len(set(filenames)) == 30
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -250,6 +250,8 @@ def copy_transport_hardening_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("crates/irohad/src/main.rs"),
     ):
@@ -604,7 +606,6 @@ def copy_acyclic_liveness_debt_topology_fixture(
     ):
         shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
     return formal_dir
-
 
 
 def mutate_tla_operator(
@@ -1645,10 +1646,6 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
             f"proof obligation {dependent_id} must appear after prerequisite "
             "successor-activation-starvation-freedom"
         ) in errors
-
-
-
-
 
 
 def test_release_gate_requires_every_deductive_module_and_positive_counts(
@@ -6746,8 +6743,8 @@ def test_terminal_application_runner_call_site_seal_is_canonical() -> None:
         call_site.projection,
         call_site.brace_context,
     ) == (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "run_inner",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "run_lifecycle_active_height",
         "terminal_application",
         (),
     )
@@ -14924,2197 +14921,8 @@ def test_successor_production_source_is_bound() -> None:
     assert module._successor_production_source_fidelity_errors(ROOT_DIR) == []
 
 
-def test_successor_run_inner_parser_rejects_neighbor_lookalike(
-    tmp_path: Path,
-) -> None:
-    """Successor checks may consume only the parsed `run_inner` item."""
-
-    module = load_checker()
-    for relative in (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/mod.rs",
-        "crates/iroha_core/src/sumeragi/status.rs",
-        "crates/iroha_core/src/sumeragi/v2.rs",
-        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-        "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_context.rs",
-        "crates/iroha_core/src/sumeragi/v2_body_store.rs",
-        "crates/iroha_core/src/sumeragi/safety_wal.rs",
-        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-        "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-        "crates/iroha_core/src/sumeragi/v2_transport.rs",
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        "crates/iroha_core/src/sumeragi/v2_apply.rs",
-        "crates/iroha_core/src/state.rs",
-        "crates/iroha_core/src/kura.rs",
-        "scripts/run_sumeragi_v2_release_gates.sh",
-    ):
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
-    copy_reviewed_rust_include_components(tmp_path)
-
-    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    source = runner.read_text(encoding="utf-8")
-    run_inner_items = module.rust_items(source, "run_inner")
-    assert len(run_inner_items) == 1
-    run_inner = run_inner_items[0]
-    owner_binding = (
-        "let mut pending_successor_activation = recovered_successor_activation\n"
-        "        .map(|authority| PendingSuccessorActivation::recovered(authority, &common_config.key_pair))\n"
-        "        .transpose()?;"
-    )
-    assert run_inner.source.count(owner_binding) == 1
-    weakened = run_inner.source.replace(
-        owner_binding,
-        "let mut pending_successor_activation = None;",
-        1,
-    )
-    neighboring_lookalike = (
-        "\n\nfn parser_only_run_inner_lookalike() {\n"
-        f"    {owner_binding}\n"
-        "    let _ = &mut pending_successor_activation;\n"
-        "}\n"
-    )
-    assert source.count(run_inner.source) == 1
-    runner.write_text(
-        source.replace(
-            run_inner.source,
-            weakened + neighboring_lookalike,
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    errors = module._successor_production_source_fidelity_errors(tmp_path)
-    assert any(
-        "run_inner recovery ownership omits production refinement tokens"
-        in error
-        for error in errors
-    ), errors
-
-
-SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "pub(in crate::sumeragi) struct ProductionLifecyclePreActivationRunnerBorrowV1",
-            "_seal: ProductionLifecyclePreActivationRunnerBorrowSealV1,",
-            "pub(in crate::sumeragi) _seal: ProductionLifecyclePreActivationRunnerBorrowSealV1,",
-            "sealed lifecycle preactivation runner borrow exposes forbidden surface",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "impl ProductionLifecyclePreActivationRunnerBorrowV1 {",
-            "fn mint_for_recovered_runner() -> Self {",
-            "pub(in crate::sumeragi) fn mint_for_recovered_runner() -> Self {",
-            "sealed lifecycle preactivation runner borrow exposes forbidden surface",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn bind_recovered_local_proposal(",
-            "if !local_proposal.state.is_pristine() {",
-            "if false {",
-            "sealed lifecycle preactivation runner borrow omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn bind_recovered_local_proposal(",
-            "LocalProposalState::from_recovered_lifecycle_attempt(true, directive)",
-            "LocalProposalState::from_recovered_lifecycle_attempt(false, directive)",
-            "sealed lifecycle preactivation runner borrow omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
-            "fn lifecycle_live_clocks_are_armed(&self) -> bool {",
-            "self.clocks_armed",
-            "false",
-            "preactivation live-clock state oracle",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "fn lifecycle_live_clocks_are_unarmed(&self) -> bool {",
-            "!self.runtime.lifecycle_live_clocks_are_armed()",
-            "true",
-            "preactivation executor live-clock state oracle",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn with_runner_setup_transaction<R, E>(",
-            "drop(initial_admission);",
-            "let _ = &initial_admission;",
-            "fail-stop closed-ingress lifecycle preactivation setup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "impl Drop for ProductionLifecyclePreActivationFailStopScopeV1 {",
-            "self.output_guard.close_admission_for_restart();",
-            "let _ = &self.output_guard;",
-            "lifecycle preactivation non-permit fail-stop scope omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn with_runner_setup_transaction<R, E>(",
-            "operation(&mut self.executor, &mut self.services)?",
-            "operation(&mut self.executor, &mut self.services).expect(\"setup\")",
-            "fail-stop closed-ingress lifecycle preactivation setup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn with_runner_setup_transaction<R, E>(",
-            "setup.complete();",
-            "drop(setup);",
-            "fail-stop closed-ingress lifecycle preactivation setup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn with_runner_setup_transaction<R, E>(",
-            "let final_admission = output_guard",
-            "let unchecked_final_admission = output_guard",
-            "fail-stop closed-ingress lifecycle preactivation setup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            ".with_runner_setup(&mut setup_runner, |executor, services| {",
-            ".without_runner_setup(&mut setup_runner, |executor, services| {",
-            "production-shaped closed-ingress preactivation setup behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete()",
-            "assert!(dropped_guard.restart_required());",
-            "assert!(!dropped_guard.restart_required());",
-            "preactivation non-permit fail-stop behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn composite_recovered_completion_dispatches_one_ranked_sign_and_preserves_the_other()",
-            "ProductionRecoveredCompletionDispatchV1::SignQueued { ordinal: paired }",
-            "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
-            "composite recovered Completion Sign selection behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn composite_recovered_completion_dispatches_one_ranked_sign_and_preserves_the_other()",
-            "assert_eq!(state.records[&unrelated].state, LifecycleState::Ready);",
-            "assert_eq!(state.records[&unrelated].state, LifecycleState::Claimed(lease));",
-            "composite recovered Completion Sign selection behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn composite_recovered_completion_capacity_unavailable_claims_no_ready_sign()",
-            "planner_io.saturate_consensus_prefix(&services);",
-            "planner_io.release_all_predecessors();",
-            "composite recovered Completion capacity-unavailable behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn recovered_completion_capacity_census_selects_once_and_drops_fail_stop()",
-            "output.abort_before_claim();",
-            "drop(output);",
-            "composite recovered Completion worker Fetch ownership behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_completion_capacity_census(",
-            "let fanout = self.recovered_decision_fetch_fanout(&owner)?;",
-            "let fanout = None;",
-            "joint recovered Completion physical-corridor census",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_completion_capacity_census(",
-            "let pending = self.lock_pending_exact_output()?;",
-            "let pending = self.lock_pending_exact_output_removed()?;",
-            "joint recovered Completion physical-corridor census",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_completion_with_runner_debt(",
-            "for ordinal in &exact_ready {",
-            "for ordinal in exact_ready.iter().take(1) {",
-            "all-row recovered Completion authentication and selection",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_completion_with_runner_debt(",
-            "capture_recovered_completion_capacity_census(probes)",
-            "capture_recovered_completion_capacity_census_removed(probes)",
-            "all-row recovered Completion authentication and selection",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_completion_with_runner_debt(",
-            "authenticated_ready_row_with_physical_capacity(",
-            "authenticated_ready_row(",
-            "all-row recovered Completion authentication and selection",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_completion_with_runner_debt(",
-            "census.select_fetch(ordinal)",
-            "census.select_sign(ordinal)",
-            "all-row recovered Completion authentication and selection",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(",
-            "owner.dispatch_recovered_completion_with_runner_debt(",
-            "owner.dispatch_recovered_decision_apply_with_runner_debt(",
-            "unified recovered Completion composite dispatch",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn composite_recovered_completion_capacity_unavailable_claims_no_ready_sign()",
-            "fn composite_recovered_completion_capacity_unavailable_claims_no_ready_sign()",
-            "fn composite_recovered_completion_capacity_unavailable_claims_ready_sign()",
-            "require exactly one real Rust/Verus function item",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            "current certified Serve rejection must own ingress",
-            "current certified Serve rejection bypassed ingress",
-            "real-cursor ordinary ingress regression omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
-            "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-            "mixed_sign_ordinal > first_summary.0",
-            "mixed_sign_ordinal < first_summary.0",
-            "genuine recovered Fetch composite-dispatch behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
-            "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-            "ProductionRecoveredCompletionDispatchV1::SignQueued",
-            "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
-            "genuine recovered Fetch composite-dispatch behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
-            "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-            "output_guard.close_admission_for_restart();",
-            "drop(output_guard);",
-            "genuine recovered Fetch composite-dispatch behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
-            "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-            "dispatch_recovered_completion_for_test(",
-            "dispatch_recovered_decision_fetch(",
-            "genuine recovered Fetch composite-dispatch behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
-            "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-            "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
-            "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
-            "genuine recovered Fetch composite-dispatch behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            "backpressured certified Serve remains lifecycle-owned",
-            "backpressured certified Serve lost lifecycle ownership",
-            "real-cursor ordinary ingress regression omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            "ProductionPreparedCertifiedServeTestSettlementV1::AdmittedAborted",
-            "ProductionPreparedCertifiedServeTestSettlementV1::Rejected(String::new())",
-            "real-cursor ordinary ingress regression omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "pub(in crate::sumeragi) enum ProductionLifecycleCompletionTurnV1<'cursor> {",
-            "PassThrough(LifecycleCurrentRunnerTurn<'cursor>)",
-            "PassThrough(LifecycleRunnerRankSnapshot)",
-            "borrow-bound lifecycle turn outcomes",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "fn settle_parked_recovered_sign_completion(",
-            "self.settle_recovered_lifecycle_vote_broadcast_and_sign()",
-            "self.settle_recovered_lifecycle_proposal_broadcast_and_sign()",
-            "unified recovered Sign settlement routing",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Service {",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
-            "ProductionLifecycleIngressSelectionV1::Retry",
-            "recovered Fetch Phase-A service failure",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
-            "crate::sumeragi::v2_effects::v2_ingress_head_can_drain(",
-            "true",
-            "ordinary/recovered ingress owner order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-            "pub(super) fn capture_next_ingress_turn_cut(",
-            "let service_guard = self.service_lock.lock();",
-            "let service_guard = self.state.lock();",
-            "queue-owned fair winner capture",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-            "pub(super) fn capture_next_ingress_turn_cut(",
-            "select_fair_v2_ingress_candidate(",
-            "select_next_admissible_ordinal(",
-            "queue-owned fair winner capture",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
-            "pub(super) fn dequeue_exact_retaining(",
-            "self.selected_physical_ordinal,",
-            "1,",
-            "exact queue-owned physical dequeue",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "Err(CertifiedServePrepareError::Backpressure) => {",
-            "operation.complete();",
-            "drop(operation);",
-            "stateful selected Serve fail-stop transaction",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "match cut.dequeue_exact_retaining() {",
-            "Some(prepared),",
-            "None,",
-            "stateful selected Serve fail-stop transaction",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "impl Drop for ProductionPreparedOrdinaryIngressTurnV1 {",
-            "handoff.close_output_for_restart();",
-            "let _ = handoff;",
-            "opaque ordinary token omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-            "pub(super) fn selected_cut_is_recovered_decision_fetch(",
-            "if response.request_hash != selected_request_hash {\n"
-            "                continue;\n"
-            "            }",
-            "if false {\n                continue;\n            }",
-            "selected response-family-only recovery census",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-            "pub(super) fn prepare_recovered_decision_fetch_from_selected_cut(",
-            "Some(selected_request_hash)",
-            "None",
-            "selected-family Phase-A preparation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
-            "if !selected_ingress_is_certified_body_response(",
-            "if false && !selected_ingress_is_certified_body_response(",
-            "selected non-response winner bypasses response census",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "let (ordinary_turn, after_ordinary_ingress) =",
-            "an ordinary head cannot be poisoned by a later response family",
-            "ordinary head unexpectedly selected lifecycle work",
-            "real-cursor ordinary ingress regression omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "fn armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result()",
-            "fn armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result()",
-            "fn armed_token_drops_without_closing_output()",
-            "require exactly one real Rust/Verus function item",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "pub(in crate::sumeragi) struct ProductionPreparedOrdinaryIngressTurnV1 {",
-            "handoff: Option<PreparedDequeuedV2IngressV1>,",
-            "pub(in crate::sumeragi) handoff: Option<PreparedDequeuedV2IngressV1>,",
-            "opaque ordinary token exposes forbidden surface",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "pub(crate) struct PreparedProductionIngressCapacityWait {",
-            "pub(crate) struct PreparedProductionIngressCapacityWait {",
-            "#[derive(Clone)]\npub(crate) struct PreparedProductionIngressCapacityWait {",
-            "retained ingress capacity wait must remain sealed",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "pub(crate) struct PreparedProductionIngressCapacityWait {",
-            "selector: PreparedLifecycleIngressSelector",
-            "pub(crate) selector: PreparedLifecycleIngressSelector",
-            "retained ingress capacity wait must remain sealed",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "impl PreparedProductionIngressCapacityWait {",
-            "/// Classify the exact retained service generation without exposing it.",
-            "pub(crate) fn selector(&self) -> &PreparedLifecycleIngressSelector {\n"
-            "        &self.selector\n"
-            "    }\n\n"
-            "    /// Classify the exact retained service generation without exposing it.",
-            "retained ingress capacity wait must remain sealed",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "impl PreparedProductionIngressCapacityWait {",
-            "/// Classify the exact retained service generation without exposing it.",
-            "pub(crate) fn into_parts(self) {\n"
-            "        drop(self);\n"
-            "    }\n\n"
-            "    /// Classify the exact retained service generation without exposing it.",
-            "retained ingress capacity wait must remain sealed",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-            "services.matches_lifecycle_body_store(body_store_identity)",
-            "true",
-            "lifecycle-owned recovered Sign dispatch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-            "reservation.class() == CapacityClass::Consensus",
-            "true",
-            "lifecycle-owned recovered Sign dispatch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "impl PreparedRecoveredLifecycleSignCompletionV1",
-            "result.is_exact()",
-            "true",
-            "adapter-private recovered Sign completion projection omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
-            "verify_individual_signature(",
-            "trust_individual_signature(",
-            "drop-inert recovered Sign adapter preview must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
-            "vote.phase == wire::GlobalPhase::Prepare",
-            "true",
-            "closed recovered Sign adapter successor shapes omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
-            "output_guard.begin_fail_stop_operation()",
-            "output_guard.is_open()",
-            "restart-closed recovered Sign-to-Broadcast settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn settle_recovered_lifecycle_sign_broadcast(",
-            "transition.persist_exact_successor().is_err()",
-            "transition.skip_durable_publication().is_err()",
-            "restart-closed recovered Sign-to-Broadcast settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-            "services.matches_lifecycle_body_store(body_store_identity)",
-            "true",
-            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-            "settle_turn(lease, super::TurnOutcome::Blocked(wait))",
-            "settle_turn(lease, super::TurnOutcome::Terminal(TerminalOutcome::Completed(None)))",
-            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-            "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
-            "recovered_lifecycle_signed_broadcast_unchecked_adjacent_ordinal",
-            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-            "for ready_ordinal in &exact_ready",
-            "for ready_ordinal in core::iter::once(&ordinal)",
-            "restart-safe recovered signed-Broadcast refanout must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_signed_broadcast_refanout(",
-            "authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new())",
-            "authority.into_parts()",
-            "durable recovered signed-Broadcast service capture omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_cold_proposal_message(",
-            "pending.prepare_atomic_fanout_batch(fanouts)",
-            "Ok(None)",
-            "durable recovered signed-Broadcast service capture omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
-            "fn recover_durable_signed_broadcast(",
-            "verified.verify_consensus_message(message)",
-            "Ok(())",
-            "cold recovered signed-Broadcast WAL and roster join omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn advance_recovered_lifecycle_signed_broadcast(",
-            "let [reducer::Effect::Broadcast(message)] = core_effects.as_slice()",
-            "let [message, ..] = core_effects.as_slice()",
-            "cold recovered signed-Broadcast reducer fast-forward omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-            "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
-            "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
-            "RecoveredWalStartupProjectionV1::PhaseVote(projection)",
-            "cold recovered phase-Broadcast storage assembly omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
-            "fn authenticate_recovered_phase_signed_broadcast_and_sign(",
-            "combined.broadcast_exactly_matches(&broadcast)",
-            "true",
-            "cold recovered phase Broadcast-and-Sign ledger join omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
-            "fn prepare_cold_adapter_startup(",
-            "authenticate_recovered_lifecycle_next_vote_body(&mut preview)",
-            "authenticate_recovered_lifecycle_next_vote_body_unchecked(&mut preview)",
-            "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
-            "fn install_recovered_broadcast_and_next_vote(",
-            "paired_next_sign: Some((next_sign_address, next_sign_digest))",
-            "paired_next_sign: None",
-            "cold recovered phase Broadcast-and-Sign registry join omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-            "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(",
-            "RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(",
-            "RecoveredWalStartupProjectionV1::PhaseBroadcast(",
-            "cold recovered signed-Broadcast storage census omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn install_recovered_sign(",
-            "prepare_cold_adapter_startup(&verified, adapter_startup, body_store)",
-            "prepare_cold_adapter_startup_unchecked(&verified, adapter_startup, body_store)",
-            "cold recovered phase owner handoff omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
-            ".prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)",
-            ".prepare_recovered_lifecycle_sign_completion(completion)",
-            "single-preview recovered next-Vote body service join must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_adapter_inline_recovered_signing_tests.rs",
-            "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
-            "fn production_recovered_proposal_sign_joins_exact_next_vote_body_store()",
-            "fn production_recovered_proposal_sign_skips_next_vote_body_store()",
-            "recovered Sign adapter preview behavior regression omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn project_proposal_exact_output_authority(",
-            "!matches!(",
-            "matches!(",
-            "affine recovered Proposal exact-output projection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_proposal_exact_output(",
-            "if self.proposal_work_retired",
-            "if false",
-            "recovered Proposal output must remain terminal after Decision",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_proposal_exact_output(",
-            "identity.same_instance(&body_store_identity)",
-            "true",
-            "recovered Proposal exact-output capture must retain its body-store owner",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_proposal_exact_output(",
-            "Arc::ptr_eq(&self.output_guard, &authority_output_guard)",
-            "true",
-            "recovered Proposal exact-output capture must retain its output guard",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_proposal_exact_output(",
-            "RecoveredLifecycleProposalExactOutputCaptureV1::Unavailable(\n                retry_authority,\n            )",
-            "RecoveredLifecycleProposalExactOutputCaptureV1::Reserved(unreachable!())",
-            "recovered Proposal capacity retry must remain source-token guarded",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn prepare_atomic_fanout_batch(",
-            "if !self.ownership_capacity_available(&additions)?",
-            "if false",
-            "atomic Proposal fanout preflight must preserve aggregate capacity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn prepare_atomic_fanout_batch(",
-            "aggregate.checked_add(count)",
-            "aggregate.saturating_add(count)",
-            "atomic Proposal fanout preflight must preserve aggregate capacity",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn capture_recovered_lifecycle_proposal_exact_output(",
-            "proposal\n            .validate(&self.context)",
-            "Ok::<(), String>(())\n            .map_err(|error| error.to_string())",
-            "retry-safe recovered Proposal exact-output capture omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn broadcast_consensus(",
-            "self.enqueue_atomic_fanout_batch_while_guarded(",
-            "self.enqueue_exact_fanout_while_guarded(",
-            "live Proposal output must not split control from chunk ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker_cold_refanout_and_recovery_cases_tests.rs",
-            "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
-            "fn recovered_proposal_exact_output_is_atomic_retryable_and_store_bound()",
-            "fn recovered_proposal_exact_output_allows_partial_control()",
-            "atomic Proposal output behavior regression omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker_output_and_handoff_cases_tests.rs",
-            "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
-            "fn atomic_fanout_batch_preflights_aggregate_capacity_and_rebases_only_on_commit()",
-            "fn atomic_fanout_batch_allows_one_child_prefix()",
-            "atomic Proposal aggregate-capacity regression omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "fn authenticate_recovered_lifecycle_next_vote_body_catalogs(",
-            "durable_bodies.get(&key) != Some(durable)",
-            "false",
-            "exact recovered next-Vote body catalog join omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn consume_for_adapter(",
-            "body_store_identity.same_instance(expected_body_store_identity)",
-            "true",
-            "opaque recovered next-Vote body authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn project_broadcast_and_sign_authority(",
-            "self.adapter.authenticate_recovered_lifecycle_next_vote(",
-            "self.adapter.trust_recovered_lifecycle_next_vote(",
-            "affine recovered Broadcast-and-next-Sign adapter projection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
-            "fn into_candidate_projection(",
-            "self.wal_identity.is_exact()",
-            "true",
-            "full executable recovered next-WAL-Vote candidate must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
-            "fn project_cold_adapter_replay_authority(",
-            "self.cold_adapter_authority_minted = true",
-            "self.cold_adapter_authority_minted = false",
-            "affine recovered Broadcast-and-next-Sign cold adapter projection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
-            "fn owns_spliced_candidates(",
-            "candidates.get(&self.broadcast.candidate.key) == Some(&self.broadcast.candidate)",
-            "true",
-            "combined cold census must retain the exact Broadcast without claiming unrelated carriers",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
-            "fn project_cold_adapter_next_sign(",
-            "self.is_exact(verified)",
-            "true",
-            "sealed recovered next-WAL-Vote cold adapter projection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
-            "verified.verify_consensus_message(message)",
-            "Ok::<(), AdapterError>(())",
-            "recovered Broadcast-and-next-Sign cold adapter replay must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1",
-            "wire::GlobalPhase::Commit => tag.view() >= next_vote.round.view",
-            "wire::GlobalPhase::Commit => tag.view() == next_vote.round.view",
-            "opaque recovered Broadcast-and-next-Sign cold adapter authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn advance_recovered_lifecycle_signed_broadcast_and_sign(",
-            "replayed_next_sign != next_sign",
-            "false",
-            "recovered Broadcast-and-next-Sign cold adapter replay must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
-            "fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
-            "let next_sign_ordinal = broadcast_ordinal.checked_add(1)?",
-            "let next_sign_ordinal = broadcast_ordinal.checked_add(2)?",
-            "frame-bound recovered Broadcast-and-next-Sign ledger classifier omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
-            "fn recovered_lifecycle_signed_broadcast_and_sign_pairs(",
-            "&index,",
-            "&RecoveredLifecycleSignedBroadcastAndSignLedgerIndexV1::new(&self.records),",
-            "combined Broadcast-and-next-Sign enumeration must reuse one bounded frame index",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn exactly_matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {",
-            "project_recovered_lifecycle_signed_broadcast_and_sign_at(self.broadcast_ordinal)",
-            "project_recovered_lifecycle_signed_broadcast_and_sign_at(0)",
-            "combined Broadcast-and-next-Sign reauthentication must retain the exact ordinal",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
-            "fn project_validated_recovered_lifecycle_signed_broadcast_and_sign_at(",
-            "index.owner_record_count(next_sign_owner) != 1",
-            "index.owner_record_count(next_sign_owner) != 0",
-            "frame-bound recovered Broadcast-and-next-Sign ledger classifier omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
-            "fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor<",
-            "adapter.project_broadcast_and_sign_authority(body)",
-            "adapter.project_broadcast_and_sign_without_body()",
-            "opaque recovered Broadcast-and-next-Sign registry preparation must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
-            "fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(",
-            ".checked_add(1)",
-            ".checked_add(0)",
-            "inert recovered Broadcast-and-next-Sign coordinator staging must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
-            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
-            "ready_index.remove(&broadcast_ordinal)",
-            "ready_index.remove(&next_sign_ordinal)",
-            "durable recovered Proposal Broadcast-and-next-Sign publication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
-            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
-            "adapter.commit_after_durable_broadcast_and_sign()",
-            "drop(adapter)",
-            "durable recovered Proposal Broadcast-and-next-Sign publication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
-            "impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_> {",
-            "adapter.commit_after_durable_vote_broadcast_and_sign()",
-            "drop(adapter)",
-            "durable recovered Broadcast-and-next-Sign publication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn commit_after_durable_broadcast_and_sign(self)",
-            "proposal_output_authority_minted: true",
-            "proposal_output_authority_minted: _",
-            "durable recovered Proposal adapter two-child commit must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "fn prepare_recovered_lifecycle_sign_completion_with_body(",
-            ".prepare_proposal_prepare_wal_body_lookup(",
-            ".project_broadcast_and_sign_body_lookup(",
-            "single-preview recovered next-Vote body executor join must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn prepare_proposal_prepare_wal_body_lookup(",
-            "next_reducer.step(persisted_event.clone())",
-            "self.next_reducer.step(persisted_event.clone())",
-            "pre-WAL initial Proposal continuation must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn append_recovered_lifecycle_proposal_prepare_wal(",
-            "self.adapter.wal.append(&encoded_wal_payload)",
-            "self.adapter.wal.recovered_records().last()",
-            "fail-stop initial Proposal WAL append must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn append_recovered_lifecycle_proposal_prepare_wal(",
-            "permit.authorizes(",
-            "permit.authorizes_for_test(",
-            "initial Proposal WAL append must retain its armed output reservation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn append_recovered_lifecycle_proposal_prepare_wal(",
-            "permit.cross_wal_attempt_boundary()",
-            "drop(permit)",
-            "fail-stop initial Proposal WAL append must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn prepare_wal_append_permit(",
-            "&& !self.wal_append.attempted",
-            "|| !self.wal_append.attempted",
-            "armed Proposal reservation lends WAL authority without parts must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn abort_before_publication(",
-            "assert!(\n            !self.wal_append.attempted",
-            "debug_assert!(\n            !self.wal_append.attempted",
-            "retry-safe recovered Proposal reservation abort must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn commit_after_durable_broadcast_and_sign(self)",
-            "adapter.pending_persistence_id = None",
-            "let _ = adapter.pending_persistence_id.take();",
-            "durable recovered Proposal adapter two-child commit must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn settle_recovered_lifecycle_proposal_prepare_wal(",
-            "output.prepare_wal_append_permit()",
-            "None::<super::v2_worker::RecoveredLifecycleProposalPrepareWalAppendPermitV1<'_>>",
-            "restart-closed initial Proposal PrepareIntent settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn settle_recovered_lifecycle_proposal_prepare_wal(",
-            "preview\n            .append_recovered_lifecycle_proposal_prepare_wal(wal_permit)",
-            "drop(preview)",
-            "restart-closed initial Proposal PrepareIntent settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-            "transition.persist_exact_successor().is_err()",
-            "false",
-            "restart-closed recovered Proposal Broadcast-and-next-Sign settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-            "output.abort_before_publication()",
-            "drop(output)",
-            "typed recovered Proposal pre-fsync output release must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
-            "preview.is_vote_broadcast_and_sign_shape()",
-            "preview.is_vote_broadcast_and_sign()",
-            "restart-closed recovered Vote Broadcast-and-next-Sign settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn settle_recovered_lifecycle_vote_broadcast_and_sign(",
-            "transition.persist_exact_successor().is_err()",
-            "false",
-            "restart-closed recovered Vote Broadcast-and-next-Sign settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn dispatch_recovered_decision_fetch_with_runner_debt(",
-            "capture_recovered_decision_fetch_exact_output(&owner)",
-            "capture_recovered_decision_fetch_output_without_reservation(&owner)",
-            "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-            "fn persist_recovered_decision_fetch_response_after_runner(",
-            "executor\n            .prepare_recovered_decision_fetch_response_claim(&task)",
-            "executor\n            .prepare_unowned_decision_fetch_response_claim(&task)",
-            "recovered Decision Fetch response persistence Phase A must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn recovered_decision_fetch_registration_available(",
-            "self.validated_certified_request_presence().is_err()",
-            "false",
-            "dedicated recovered Decision Fetch request owner census omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "fn begin_fetch<S: V2EffectServices>(",
-            "owner.matches_body_coordinates(round, subject)",
-            "false",
-            "ordinary and recovered Decision Fetch coordinate fence omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-            "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(",
-            "self.revalidate_recovered_decision_fetch_response_candidate(",
-            "self.trust_recovered_decision_fetch_response_candidate(",
-            "typed recovered Decision Fetch selector consumption must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-            "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-            "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
-            "PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence",
-            "queue-owned recovered Decision Fetch selector must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
-            "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-            "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-            "true",
-            "queue-owned recovered Decision Fetch selector must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "fn select_fair_v2_ingress_candidate<T>(",
-            "for dependency_pass in [false, true]",
-            "for dependency_pass in [true, false]",
-            "queue-owned recovered Decision Fetch fair selection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(in crate::sumeragi) fn commit_with_queue(",
-            "owner.commit_exact_response_claim(response_hash)",
-            "true",
-            "recovered Decision Fetch response claim publication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
-            "owned.recovered_decision_fetch.is_some()",
-            "false",
-            "recovered Decision Fetch mixed completion head fence must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
-            "recovered_decision_fetch_body_completion:\n        Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,",
-            "recovered_decision_fetch_body_completion: (),",
-            "launched recovered Decision Fetch Drop order must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(",
-            "transition.persist_exact_successor().is_err()",
-            "false",
-            "restart-closed recovered Decision Fetch-to-Store settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(",
-            "locked_dequeue.commit()",
-            "drop(locked_dequeue)",
-            "restart-closed recovered Decision Fetch-to-Store settlement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn open_recovered_decision_store_startup(",
-            ".authenticate_recovered_decision_fetch_store(&projection, &store_projection)",
-            ".trust_recovered_decision_fetch_store(&projection, &store_projection)",
-            "recovered Decision Store cold restart and marker-prefix closure omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn advance_recovered_decision_fetch_store(",
-            ".project_store_adapter_authority(body)",
-            ".trust_store_adapter_authority(body)",
-            "recovered Decision Store cold adapter reconstruction omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
-            "pub(super) fn install_recovered_wal_decision_store<'registry>(",
-            "pub(super) fn install_recovered_wal_decision_store<'registry>(",
-            "pub(super) fn install_unchecked_recovered_wal_decision_store<'registry>(",
-            "dedicated recovered Decision Store registry install omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_transport.rs",
-            "pub(in crate::sumeragi) fn authenticate_response(",
-            "authenticate_certified_body_response_for_request(",
-            "authenticate_certified_body_response_without_request(",
-            "request-scoped certified response authentication omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn exactly_matches_successor_owner(",
-            ".validate_authenticated_cut(&owner.serve_payloads)",
-            ".validate_authenticated_cut_for_mutation(&owner.serve_payloads)",
-            "CompleteTip canonical predecessor store join omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-            "pub(super) fn into_serve_payloads(self)",
-            "pub(super) fn into_serve_payloads(self)",
-            "pub(super) fn into_unsealed_payloads(self)",
-            "CompleteTip bodyless completion promotion guard omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-            "pub(super) fn validate_authenticated_cut(",
-            "let observed = self.reload_payload_census_strict()?;",
-            "let observed = BTreeMap::new();",
-            "CompleteTip body-independent Completed metadata authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-            "fn reload_payload_census_strict(",
-            "fs::read_dir(&self.directory)",
-            "fs::read_dir(temporary_path_for_mutation)",
-            "CompleteTip Serve payload directory census must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-            "fn reload_payload_census_strict(",
-            "fs::symlink_metadata(&self.directory)",
-            "fs::metadata(&self.directory)",
-            "CompleteTip Serve payload directory census must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-            "fn reload_payload_census_strict(",
-            "self.load_path(&path, metadata.len())?",
-            "return Ok(payloads);",
-            "CompleteTip Serve payload directory census must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
-            "pub(crate) struct ProductionLifecycleOwnerV1",
-            "serve_payloads: crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,",
-            "serve_payloads: (),",
-            "production lifecycle owner retained Serve census omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
-            "fn run_complete_tip_retirement_release_regressions()",
-            "ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();",
-            "let _ = ();",
-            "production lifecycle owner retained Serve census omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn authorizes_successor_status(",
-            "self.complete_tip.successor_context_id() == successor.height_context_id",
-            "true",
-            "CompleteTip restart publication authority must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "pub(in crate::sumeragi) struct BoundRecoveredCompleteTipSuccessorOwnerV1 {",
-            "#[cfg(test)]\nimpl BoundRecoveredCompleteTipSuccessorOwnerV1 {",
-            "impl BoundRecoveredCompleteTipSuccessorOwnerV1 {\n"
-            "    pub(in crate::sumeragi) fn into_owner(self) -> ProductionLifecycleOwnerV1 { self.owner }\n"
-            "}\n\n"
-            "#[cfg(test)]\nimpl BoundRecoveredCompleteTipSuccessorOwnerV1 {",
-            "CompleteTip exact H+1 owner bind must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(in crate::sumeragi) fn authorizes(\n        self,",
-            "self.kura_identity.matches(kura)",
-            "true",
-            "recovered lifecycle storage authority handoff omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn mint_from_recovered_height(",
-            "assert!(permit.authorizes(kura, verified, signature_policy, genesis_account));",
-            "assert!(true);",
-            "recovery-minted lifecycle storage authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {",
-            "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,",
-            "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,\n    genesis_account: AccountId,",
-            "move-only authenticated genesis launch input must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn launch(\n        mut self,",
-            "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
-            "true",
-            "Kura-bound production lifecycle launch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn launch_local_identity_matches(",
-            "local_peer.public_key() != key_pair.public_key()",
-            "false",
-            "local launch identity preflight omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn launch_local_identity_matches(",
-            "local_validator.is_none_or(|observed| roster_position == Some(observed))",
-            "local_validator.is_none_or(|_| true)",
-            "local launch identity preflight omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn mint_for_recovered_runner(local_signer: KeyPair, block_cadence: Duration) -> Self",
-            "fn mint_for_recovered_runner(local_signer: KeyPair, block_cadence: Duration) -> Self",
-            "pub(in crate::sumeragi) fn mint_for_recovered_runner(local_signer: KeyPair, block_cadence: Duration) -> Self",
-            "runner-sealed recovered lifecycle factory dependencies must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(",
-            "let (local_signer, block_cadence) = permit.into_factory_dependencies();",
-            "let (local_signer, block_cadence) = permit.into_factory_dependencies();\n        let _placeholder_cadence = state.sumeragi_block_cadence();",
-            "authenticated lifecycle factory cadence must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
-            "self.adapter.wal.matches_path(&storage.wal_path)",
-            "true",
-            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
-            "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
-            "true",
-            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
-            "body_store: super::v2_body_store::QuarantinedV2BodyStore",
-            "body_store: super::v2_body_store::V2BodyStore",
-            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
-            ".into_revalidated_lifecycle_startup(",
-            ".into_revalidated_startup(",
-            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
-            "pub(in crate::sumeragi) fn into_quarantined_recovered_startup(",
-            "!self.validated.is_empty()",
-            "false",
-            "fresh quarantined recovered body-store cut omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
-            "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
-            "apply_service.recovered_finality_subject(context)",
-            "None::<VerifiedRecoveredFinalitySubject>.ok_or(())?",
-            "fixed quarantined recovered marker replay must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
-            "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
-            ".retain_recovered_markers_for_authority(validation_authority)",
-            ".retain_recovered_markers_for_mutation(validation_authority)",
-            "fixed quarantined recovered marker replay must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_body_store.rs",
-            "pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(",
-            ".revalidate_recovered_markers(|body|",
-            ".retain_recovered_markers_for_mutation(|body|",
-            "fixed quarantined recovered marker replay must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn bind_production_lifecycle_owner_factory_inputs_v1(",
-            "state.matches_kura_instance(&kura)",
-            "true",
-            "recovery-minted lifecycle storage authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn launch(\n        mut self,",
-            "ProductionV2Services::start_with_apply_service(",
-            "ProductionV2Services::start(",
-            "Kura-bound production lifecycle launch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn launch(\n        mut self,",
-            "ProductionLifecycleApplyServiceLaunchPermitV1 {",
-            "ForgedProductionLifecycleApplyServiceLaunchPermitV1 {",
-            "sealed replay-service permit mint must contain",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
-            "pub(in crate::sumeragi) fn with_recovered_kura_binding_and_apply_service(",
-            "self.apply_service = Some(apply_service);",
-            "drop(apply_service);",
-            "production lifecycle owner Kura seal omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(in crate::sumeragi) fn start_with_apply_service(",
-            "apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
-            "true",
-            "sealed replay-service worker transfer omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/state.rs",
-            "pub(crate) fn matches_kura_instance(",
-            "Arc::ptr_eq(&self.kura, kura)",
-            "true",
-            "fixed State/Kura identity oracle omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_apply.rs",
-            "pub(in crate::sumeragi) fn matches_lifecycle_launch(",
-            "Arc::ptr_eq(&self.state, state)",
-            "true",
-            "fixed recovered Apply-service identity oracle omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
-            "adapter.wal.matches_path(expected_wal_path)",
-            "true",
-            "sealed adapter leader-wire launch projection omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/safety_wal.rs",
-            "fn publish_atomic(&self, frame: &[u8], maximum: u64, label: &str)",
-            "let durable = rustix::fs::statat(",
-            "let durable = promoted;",
-            "opened safety-WAL directory authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-            "pub(crate) fn open_with_safety_wal_authority(\n"
-            "        storage: SafetyWalServicedCandidateStoreAuthority,",
-            "storage: SafetyWalServicedCandidateStoreAuthority",
-            "storage: SafetyWalLeaderWireStoreAuthority",
-            "typed WAL-adjacent production stores omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
-            "*leader_wire_launch_prepared = true;",
-            "let _ = leader_wire_launch_prepared;",
-            "sealed adapter leader-wire launch projection omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn open_gate(",
-            "body_store\n            .recovery_catalog()",
-            "BTreeMap::new()",
-            "sealed adapter leader-wire launch projection omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn launch(\n        mut self,",
-            "leader_wire_launch.restored_producer_ordinal_high_watermark()",
-            "None",
-            "Kura-bound production lifecycle launch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn launch(\n        mut self,",
-            "leader_wire_restore.scheduler_ordinal_high_watermark()",
-            "0",
-            "Kura-bound production lifecycle launch must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn retire(&mut self) -> Result<(), String>",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
-            "self.gate = None;",
-            "sealed leader-wire launch binding omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn bind_certified_serve(",
-            "self.ingress.bind_certified_serve_gate(gate.clone())",
-            "Ok(())",
-            "sealed leader-wire launch binding omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn retire(&mut self) -> Result<(), String>",
-            ".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)",
-            ".unbind_certified_serve_gate(certified_serve_gate)",
-            "sealed leader-wire launch binding omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_context.rs",
-            "pub fn freeze_staged_genesis_v2(",
-            "let authenticated_genesis = AuthenticatedGenesisBodyV1::authenticate(genesis)?;",
-            "let authenticated_genesis = forged_authenticated_genesis;",
-            "signed genesis bootstrap seal mint omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_context.rs",
-            "pub struct GenesisV2Bootstrap {",
-            "pub struct GenesisV2Bootstrap {",
-            "#[derive(Debug, Clone)]\npub struct GenesisV2Bootstrap {",
-            "move-only authenticated genesis bootstrap must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/mod.rs",
-            "pub struct GenesisWithPubKey {",
-            "pub struct GenesisWithPubKey {",
-            "#[derive(Debug, Clone)]\npub struct GenesisWithPubKey {",
-            "move-only genesis runner bundle must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn recover_active_height_with_plan(",
-            "if !authenticated_genesis.authorizes(&genesis_public_key) {",
-            "if false {",
-            "recovery-sealed fresh genesis handoff omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn recover_active_height_with_plan(",
-            "authenticated_genesis: Some(authenticated_genesis),",
-            "authenticated_genesis: None,",
-            "recovery-sealed fresh genesis handoff omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "pub(in crate::sumeragi) fn launch(\n        mut self,",
-            "authenticated_genesis.signed_block()",
-            "forged_genesis_body_for_mutation",
-            "move-only authenticated genesis launch input omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn authorizes_retained_successor(",
-            "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
-            "true",
-            "CompleteTip restart publication authority must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-            "fn open_ingress_for_active_height(",
-            "output_guard.begin_fail_stop_operation()",
-            "output_guard.acquire()",
-            "open_ingress_for_active_height must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
-            "SumeragiV2Adapter::open_deferred_status(",
-            "run_inner live successor startup must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "V2EffectExecutor::open_with_body_store(",
-            "V2EffectExecutor::open(",
-            "run_inner live successor startup must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "fn consume_prepared_dequeued_v2_ingress(",
-            ".serve_historical_body(kura, request, &sender, local_key)",
-            ".serve_historical_body(kura, context_store, request, &sender, local_key)",
-            "historical ingress routing omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "fn consume_prepared_dequeued_v2_ingress(",
-            "executor.accept_certified_body_response_with_ingress_ownership(\n"
-            "                response,\n"
-            "                &sender,\n"
-            "                &ingress_ownership,\n"
-            "                services,\n"
-            "            )",
-            "executor.accept_certified_body_response_with_ingress_ownership(\n"
-            "                response,\n"
-            "                &sender,\n"
-            "                ingress_ownership,\n"
-            "                services,\n"
-            "            )",
-            "historical ingress routing omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-            "fn initial_block_sync_deadline(",
-            "if eager_recovery {\n        height_started_at\n    } else {",
-            "if eager_recovery {\n"
-            "        deadline_after(height_started_at, round_timeout)\n"
-            "    } else {",
-            "recovery-scoped eager block-sync initial_block_sync_deadline "
-            "declaration and complete control flow",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "admitted_discovered_commit_qc = true;",
-            "admitted_discovered_commit_qc = false;",
-            "only authenticated discovered CommitQC admission/coalescing with "
-            "serialized reducer ownership may turn an outstanding request from "
-            "Some to None and retain eager block-sync",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn run_inner(",
-            "let (receipt, artifact, lane_work, mut finalized_services) = finality;",
-            "let (receipt, artifact, _lane_work, mut finalized_services) = finality;",
-            "successor startup must carry interrupted-tip or admitted discovered "
-            "CommitQC recovery and clear ordinary live finality",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
-            "const fn retain_eager_block_sync(",
-            "recovering_interrupted_tip || admitted_discovered_commit_qc",
-            "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
-            "recovery-scoped eager block-sync retain_eager_block_sync "
-            "declaration and complete control flow",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn publish_recovered_v2_successor_height_at(",
-            "set_v2_status_at(successor, now);",
-            "update_v2_successor_work_stage_at(finalized_height, SumeragiV2LocalWorkStage::Running, SumeragiV2LocalWorkStage::Complete, now)?; set_v2_status_at(successor, now);",
-            "may not fabricate physical predecessor completion",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn activate_v2_successor_height_at(",
-            "validate_v2_predecessor_status(\n"
-            "        &predecessor_status,\n"
-            "        finalized_height,\n"
-            "        SumeragiV2LocalWorkStage::Running,\n"
-            "    )?;",
-            "let _ = &predecessor_status;",
-            "activate_v2_successor_height_at omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn activate_v2_successor_height_at(",
-            "predecessor_status_height: predecessor_status.height,",
-            "predecessor_status_height: finalized_height,",
-            "activate_v2_successor_height_at omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn activate_v2_successor_height_at(",
-            "update_v2_successor_work_stage_at(\n"
-            "        finalized_height,\n"
-            "        SumeragiV2LocalWorkStage::Running,\n"
-            "        SumeragiV2LocalWorkStage::Complete,\n"
-            "        now,\n"
-            "    )?;",
-            "update_v2_successor_work_stage_at(finalized_height, SumeragiV2LocalWorkStage::Running, SumeragiV2LocalWorkStage::Running, now)?;",
-            "activate_v2_successor_height_at omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn activate_v2_successor_height_at(",
-            "let _authorized_trace = checked_trace.into_projection();",
-            "drop(checked_trace);",
-            "activate_v2_successor_height_at omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "pub(crate) fn begin_v2_successor_activation(",
-            "let _authorized_lifecycle = checked_lifecycle.into_projection();\n"
-            "    update_v2_successor_work_stage_at(\n"
-            "        height,\n"
-            "        SumeragiV2LocalWorkStage::Queued,\n"
-            "        SumeragiV2LocalWorkStage::Running,\n"
-            "        Instant::now(),\n"
-            "    )",
-            "let mutation_result = update_v2_successor_work_stage_at(\n"
-            "        height,\n"
-            "        SumeragiV2LocalWorkStage::Queued,\n"
-            "        SumeragiV2LocalWorkStage::Running,\n"
-            "        Instant::now(),\n"
-            "    );\n"
-            "    let _authorized_lifecycle = checked_lifecycle.into_projection();\n"
-            "    mutation_result",
-            "begin_v2_successor_activation must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn publish_recovered_v2_successor_height_at(",
-            "published_status_height_before: published.as_ref().map_or(0, |status| status.height),",
-            "published_status_height_before: 0,",
-            "publish_recovered_v2_successor_height_at omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn publish_recovered_v2_successor_height_at(",
-            "if let Some(published) = published {\n"
-            "        return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(\n"
-            "            published.height,\n"
-            "        ));\n"
-            "    }\n"
-            "    set_v2_status_at(successor, now);",
-            "set_v2_status_at(successor, now);",
-            "publish_recovered_v2_successor_height_at must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "pub(crate) fn begin_v2_successor_activation(",
-            "stage_before: successor_stage_projection(status.liveness.work.successor_height),",
-            "stage_before: SUCCESSOR_STAGE_QUEUED,",
-            "begin_v2_successor_activation omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "pub(crate) fn mark_v2_restart_required()",
-            '"Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"\n'
-            "                );\n"
-            "                return;",
-            '"Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"\n'
-            "                );",
-            "mark_v2_restart_required must contain 'return;' exactly 2 time(s)",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "pub(crate) fn mark_v2_restart_required()",
-            "check_production_successor_startup_lifecycle_transition(lifecycle)",
-            "Some(lifecycle)",
-            "mark_v2_restart_required omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
-            "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
-            "let published_height = 0;",
-            "PendingSuccessorActivation omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
-            "let Some(checked_lifecycle) =\n"
-            "            check_production_successor_startup_lifecycle_transition(lifecycle)\n"
-            "        else {\n"
-            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
-            "        };\n"
-            "        let _authorized_lifecycle = checked_lifecycle.into_projection();",
-            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(\n"
-            "            lifecycle,\n"
-            "        ) {\n"
-            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
-            "        }",
-            "must use the opaque checked-transition gate; found obsolete direct-kernel forms",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn bind(\n        self,",
-            "authority_predecessor: authority.predecessor().refinement_projection(),",
-            "authority_predecessor: self.predecessor.refinement_projection(),",
-            "PendingSuccessorConstruction omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn authenticate(\n        artifact: &wire::finality::V2FinalityArtifact,",
-            "|| receipt.certificate() != artifact.commit_qc.as_ref()",
-            "|| false",
-            "DurableV2PredecessorIdentity::authenticate omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn authenticate(\n        artifact: &wire::finality::V2FinalityArtifact,",
-            "if !production_durable_predecessor_identity_kernel(identity.refinement_projection()) {",
-            "if false {",
-            "DurableV2PredecessorIdentity::authenticate omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
-            "record_hash: HashOf::new(record),",
-            "record_hash: HashOf::new(&wire::SnapshotV2BootstrapRecord::default()),",
-            "SnapshotSuccessorActivationAuthority::new omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn recover_active_height_with_plan(",
-            "if record.context() != &bootstrap.context\n"
-            "            || record.proofs_of_possession() != bootstrap.validator_set_pops",
-            "if false",
-            "recover_active_height_with_plan snapshot authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn recover_active_height_with_plan(",
-            "v2_finality_artifact_with_receipt(durable_height)",
-            "v2_finality_artifact(durable_height)",
-            "recover_active_height_with_plan complete-tip authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "    fn register_parent_qc(",
-            "if !reference.same_commit_decision(frozen) {",
-            "if false {",
-            "WireRegistry::register_parent_qc omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "    fn justification_to_core(",
-            ".map(|certificate| self.register_parent_qc(certificate))",
-            ".map(|certificate| self.qc_reference_to_core(&certificate.as_ref()))",
-            "WireRegistry::justification_to_core omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "fn verify_proposal_justification_authority(",
-            "(Some(certificate), Some(parent_verification)) => verify_quorum_certificate(",
-            "(Some(_), Some(_)) => Ok(",
-            "verify_proposal_justification_authority omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
-            "fn build_historical_body_response(",
-            ".position(|entry| entry.validator == responder_peer)",
-            ".any(|entry| entry.validator == responder_peer)",
-            "build_historical_body_response must preserve exact production order",
-        ),
-        (
-            "scripts/run_sumeragi_v2_release_gates.sh",
-            "required_production_liveness_tests=(",
-            "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
-            "sumeragi::v2_block_sync::tests::catch_up_is_not_release_bound",
-            "production refinement test must be pinned exactly once",
-        ),
-        (
-            "scripts/run_sumeragi_v2_release_gates.sh",
-            "required_production_liveness_tests=(",
-            "sumeragi::v2::tests::production_recovered_proposal_sign_joins_exact_next_vote_body_store",
-            "sumeragi::v2::tests::production_recovered_proposal_sign_is_not_release_bound",
-            "production refinement test must be pinned exactly once",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn activate_with(",
-            "self.executor\n            .arm_live_clocks(now)",
-            "let _ = now",
-            "one-shot lifecycle activation transaction must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
-            ".activate(Instant::now(), activation, local_proposal_state)",
-            ".activate(Instant::now(), activation_forbidden, local_proposal_state)",
-            "production lifecycle activation behavior must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn activate_with(",
-            "activation.complete();",
-            "drop(activation);",
-            "one-shot lifecycle activation transaction must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "struct ProductionLifecycleRunnerActivationV1",
-            "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
-            "true",
-            "runner-owned lifecycle activation authority must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "struct ProductionLifecycleRunnerActivationV1",
-            "fn current_height(",
-            "pub(in crate::sumeragi) fn current_height(",
-            "runner-owned lifecycle activation status classes must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "struct ProductionLifecycleCompleteTipRunnerActivationV1",
-            "retirement.authorizes_successor_status(&successor)",
-            "true",
-            "runner-owned CompleteTip lifecycle activation authority must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "struct ProductionLifecycleCompleteTipRunnerActivationV1",
-            "fn mint_for_recovered_runner(",
-            "pub(in crate::sumeragi) fn mint_for_recovered_runner(",
-            "runner-owned CompleteTip lifecycle activation seal must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
-            "launched.activate_recovered_complete_tip(now, runner, retirement, local_proposal)",
-            "launched.activate(now, runner, local_proposal)",
-            "CompleteTip exact H+1 owner bind must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn with_runner_runtime<R>(",
-            "_runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1",
-            "_runner: &mut ()",
-            "borrow-bound activated lifecycle owner omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "struct ActivatedProductionLifecycleV1",
-            "launched: LaunchedProductionLifecycleV1",
-            "pub(in crate::sumeragi) launched: LaunchedProductionLifecycleV1",
-            "opaque activated lifecycle owner must use the opaque checked-transition gate",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "struct ActivatedProductionLifecycleV1",
-            "local_proposal: ProductionLifecyclePreparedLocalProposalStateV1,\n    launched: LaunchedProductionLifecycleV1,",
-            "launched: LaunchedProductionLifecycleV1,\n    local_proposal: ProductionLifecyclePreparedLocalProposalStateV1,",
-            "opaque activated lifecycle owner drop order must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "struct ProductionLifecycleActivatedRunnerAuthorityV1",
-            "self.ingress_ready.store(false, Ordering::Release);",
-            "let _ = &self.ingress_ready;",
-            "activated runner readiness retirement must contain",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-            "fn authenticate_current_for_lifecycle_retirement(",
-            "self.validate_authenticated_cut(&authenticated)?;",
-            "let _ = &authenticated;",
-            "live Serve retirement directory authentication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn refresh_live_serve_retirement_cut(",
-            "exactly_covers_finalization_work(&self.coordinator)",
-            "exactly_covers_recovered_ready_work(&self.coordinator)",
-            "launched live Serve retirement refresh must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-            "fn authenticate_live_finalization_serve_census(",
-            "receipt.exactly_matches_pending(payload.request())",
-            "true",
-            "live finalization Serve ledger/admission-wait join must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs",
-            "fn matches_current_finalization_record(",
-            "WaitSource::Recovery(digest)",
-            "WaitSource::External(digest)",
-            "volatile refanned Broadcast finalization state omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
-            "fn exact_optional_recovered_wal_authority(",
-            "carrier.pairs_exact_next_sign(next_sign, next_sign_digest)",
-            "true",
-            "finalization-only recovered registry census omits production refinement tokens",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn into_finalized_rollover(",
-            "launched\n            .leader_wire_ingress_binding\n            .retire()",
-            "Ok(())",
-            "activated lifecycle finalization must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "impl FinalizedProductionLifecycleRolloverV1",
-            "refresh_live_serve_retirement_cut(&services, &retired_ingress)",
-            "refresh_live_serve_retirement_cut_for_test()",
-            "typed lifecycle finalized-output rollover must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "impl ProductionLifecyclePostOutputHandoffV1",
-            "publication.consume_owners(registry)",
-            "drop(publication)",
-            "post-output lifecycle-store retirement must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs",
-            "fn persist_exact_finalization_successor(",
-            "store.load()? != retired",
-            "false",
-            "opaque all-row finalization publication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs",
-            "fn persist_exact_finalization_successor(",
-            "coordinator: self",
-            "coordinator: LifecycleCoordinator::from_recovery",
-            "opaque all-row finalization publication must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "impl ProductionLifecycleCleanupReadyV1",
-            "self.services.allow_clean_shutdown()",
-            "let _ = &self.services",
-            "cleanup-ready lifecycle service teardown must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            "TransactionBuilder::new_genesis(",
-            "TransactionBuilder::new(",
-            "production lifecycle finalization behavior must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            "Algorithm::Ed25519",
-            "Algorithm::BlsNormal",
-            "production lifecycle finalization behavior must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            ".into_finalized_rollover(&mut runner)",
-            ".retire_lifecycle_stores_for_test(finality_receipt)",
-            "production lifecycle finalization behavior must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-            ".retain_merge_sidecars_for_global_view(",
-            ".retain_merge_sidecars_for_global_view_removed(",
-            "production lifecycle finalization behavior must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "pub(in crate::sumeragi) fn project_proposal_exact_output_authority(",
-            "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign\n"
-            "                    | RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal",
-            "RecoveredLifecycleSignAdapterSuccessorShapeV1::BroadcastAndSign",
-            "recovered Proposal output must preserve both first-release successor shapes",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
-            "fn install_recovered_wal_decision_store<'registry>(",
-            "fn install_recovered_wal_decision_store<'registry>(",
-            "fn install_recovered_wal_decision_store(",
-            "recovered Decision Store installation must retain its registry lifetime",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "fn into_parts_with_lifecycle_storage_authority(",
-            "if !kura_identity.matches(kura) {",
-            "if false {",
-            "verified successor lifecycle storage authority projection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "fn into_parts_with_lifecycle_storage_authority(",
-            "let signature_policy = BlockSignaturePolicy::RotatingLeader;",
-            "let signature_policy = caller_signature_policy;",
-            "verified successor lifecycle storage authority projection must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "fn build_verified_successor(",
-            "kura_identity: state.kura().instance_identity(),",
-            "kura_identity: foreign_kura.instance_identity(),",
-            "verified successor exact Kura retention must contain",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "fn verified_successor_projects_only_its_exact_kura_lifecycle_storage()",
-            "Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch { height: 2 })",
-            "Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch { height: 3 })",
-            "verified successor lifecycle storage projection behavior must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "pub(in crate::sumeragi) struct PreparedDequeuedV2IngressV1 {",
-            "inbound: Option<InboundBlockMessage>,",
-            "pub(in crate::sumeragi) inbound: Option<InboundBlockMessage>,",
-            "opaque already-dequeued ordinary owner exposes forbidden surface",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "fn consume_prepared_dequeued_v2_ingress(",
-            "if !prepared.matches_output_guard(&services_output_guard) {",
-            "if false {",
-            "single exact ordinary post-dequeue runner tail",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn drain_v2_ingress(",
-            "consume_prepared_dequeued_v2_ingress(",
-            "consume_unsealed_v2_ingress(",
-            "legacy and lifecycle ordinary ingress share one post-dequeue tail",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-            "fn consume_prepared_ordinary_ingress_turn(",
-            "consume_prepared_dequeued_v2_ingress(",
-            "consume_unsealed_v2_ingress(",
-            "activated lifecycle ordinary ingress shares the runner tail",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "pub(in crate::sumeragi) struct PreparedRecoveredPendingKuraApplyReplayV1 {",
-            "effect: AdapterEffect,",
-            "pub(in crate::sumeragi) effect: AdapterEffect,",
-            "opaque pending-Kura replay types expose forbidden surface",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "fn bind_pending_kura_apply(",
-            "expected.height() != self.adapter.wire_context.height",
-            "false",
-            "pending-Kura startup context binding",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "fn authenticate_final_wal_startup_authority(",
-            "subject.block_hash == expected.block_hash()",
-            "true",
-            "pending-Kura exact Decision-Fetch authentication",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "fn authenticate_final_wal_startup_authority(",
-            "authority: RecoveredWalStartupAuthorityV1::None,",
-            "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch),",
-            "pending-Kura exact Decision-Fetch authentication",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "fn into_serialized_runtime(",
-            "vec![effect],",
-            "Vec::new(),",
-            "pending-Kura runtime sidecar ownership",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "fn install(",
-            "let genesis = executor.verify_pending_kura_apply_replay(expected, &effects)?;",
-            "let genesis = None;",
-            "pending-Kura verification-before-dispatch install",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn missing_pending_kura_replay(",
-            "output_guard.close_admission_for_restart();",
-            "let _ = output_guard;",
-            "missing pending-Kura replay fail-stop",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn install_pending_kura_apply(",
-            "missing_pending_kura_replay(output_guard.as_ref())",
-            "ProductionPendingKuraApplyInstallErrorV1::MissingReplay",
-            "fail-stop pending-Kura preactivation install",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn activate_with(",
-            "self.recovered_local_proposal_attempt.is_some()",
-            "false",
-            "ordinary activation rejects incomplete recovered local-Proposal setup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn lifecycle_activation_recovery_blocker(",
-            "pending_kura_replay || pending_kura_evidence",
-            "false",
-            "ordinary activation recovery preflight",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn initialize_recovered_local_proposal(",
-            "recovered.exactly_matches_directive(directive)",
-            "true",
-            "closed-ingress recovered local-Proposal initialization",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn initialize_recovered_local_proposal(",
-            "if !runner.bind_recovered_local_proposal(directive) {",
-            "if false {",
-            "closed-ingress recovered local-Proposal initialization",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            "struct RecoveredLifecycleLocalProposalAttemptV1 {",
-            "subject: wire::BlockSubject,",
-            "pub(in crate::sumeragi) subject: wire::BlockSubject,",
-            "opaque recovered local-Proposal owner exposes forbidden surface",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
-            "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
-            "assert!(local_proposal_state.already_attempted(directive));",
-            "assert!(!local_proposal_state.already_attempted(directive));",
-            "production-shaped recovered local-Proposal initialization behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn activate_with(",
-            "local_proposal,\n            launched: self,",
-            "launched: self,",
-            "ordinary activation retains prepared local-Proposal state",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn activate_with(",
-            "if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {",
-            "if false {",
-            "ordinary activation rejects incomplete recovered local-Proposal setup",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "impl ProductionLifecyclePreparedLocalProposalStateV1",
-            "self.context_id == context_id",
-            "true",
-            "affine prepared local-Proposal state omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "impl ProductionLifecyclePreparedLocalProposalStateV1",
-            "self.directive == directive",
-            "true",
-            "affine prepared local-Proposal state omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "impl ProductionLifecyclePreparedLocalProposalStateV1",
-            ".prepared_local_proposal_exactly_matches(directive)",
-            ".local_proposal_state_is_pristine()",
-            "affine prepared local-Proposal state omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn prepared_local_proposal_state_is_affine_and_context_directive_bound()",
-            "assert!(!prepared.exactly_matches(foreign_context, directive));",
-            "assert!(prepared.exactly_matches(foreign_context, directive));",
-            "affine prepared local-Proposal state behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
-            "self.launched.initialize_recovered_local_proposal(runner)",
-            "unreachable!()",
-            "CompleteTip recovered local-Proposal initialization delegation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn into_finalized_rollover(",
-            "mut launched,\n            local_proposal,\n            runner_activation,",
-            "runner_activation,\n            local_proposal,\n            mut launched,",
-            "activated lifecycle finalization must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            "fn retire_lifecycle_stores_for_test(",
-            "mut launched,\n            local_proposal,\n            runner_activation,",
-            "runner_activation,\n            local_proposal,\n            mut launched,",
-            "consuming activated Serve retirement fixture must preserve exact production order",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
-            "fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources()",
-            "decision.subject.block_hash,",
-            "HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b\"wrong pending block\")),",
-            "pending-Kura bridge behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
-            "fn missing_pending_kura_replay_closes_canonical_output()",
-            "assert!(output_guard.restart_required());",
-            "assert!(!output_guard.restart_required());",
-            "missing pending-Kura replay behavior",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-            "impl Drop for PreparedDequeuedV2IngressFailStopScopeV1 {",
-            "self.output_guard.close_admission_for_restart();",
-            "let _ = &self.output_guard;",
-            "ordinary runner-tail non-permit fail-stop scope omits",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-            "fn with_pending_kura_apply_replay(",
-            "effects.is_empty() && pending_kura_apply.is_none()",
-            "true && pending_kura_apply.is_none()",
-            "pending-Kura pristine storage-only startup attachment",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2.rs",
-            '#[path = "v2_pending_kura_recovery.rs"]',
-            '#[path = "v2_pending_kura_recovery.rs"]',
-            '#[path = "v2_pending_kura_recovery_removed.rs"]',
-            "sealed lifecycle child module wiring",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-            '#[path = "v2_lifecycle_preactivation.rs"]',
-            '#[path = "v2_lifecycle_preactivation.rs"]',
-            '#[path = "v2_lifecycle_preactivation_removed.rs"]',
-            "sealed lifecycle child module wiring",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            '#[path = "v2_runner/ordinary_ingress_consumer.rs"]',
-            '#[path = "v2_runner/ordinary_ingress_consumer.rs"]',
-            '#[path = "v2_runner/ordinary_ingress_consumer_removed.rs"]',
-            "sealed lifecycle child module wiring",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
-            '#[path = "v2_lifecycle_coordinator_support.rs"]',
-            '#[path = "v2_lifecycle_coordinator_support.rs"]',
-            '#[path = "v2_lifecycle_coordinator_support_removed.rs"]',
-            "sealed lifecycle child module wiring",
-        ),
+_execute_test_component(
+    "sumeragi_v2_proof_ledger_successor_mutation_cases.py"
 )
 
 SUCCESSOR_PRODUCTION_SOURCE_MAPPING_COMPANIONS = (
@@ -17123,7 +14931,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_COMPANIONS = (
 SUCCESSOR_PRODUCTION_SOURCE_MAPPING_PRIMARY = SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS[30:]
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 290
+) == 375
 
 
 @pytest.mark.parametrize(
@@ -17148,16 +14956,24 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_apply_tests.rs",
         "crates/iroha_core/src/sumeragi/v2_recovery.rs",
         "crates/iroha_core/src/sumeragi/v2_context.rs",
         "crates/iroha_core/src/sumeragi/v2_body_store.rs",
         "crates/iroha_core/src/sumeragi/safety_wal.rs",
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs",
         "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/preactivation_ingress.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
@@ -17165,6 +14981,8 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_concrete_admission.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
@@ -17175,7 +14993,9 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ingress_position.rs",
         "crates/iroha_core/src/sumeragi/v2_transport.rs",
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
+        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "crates/iroha_core/src/snapshot.rs",
         "crates/iroha_core/src/state.rs",
         "crates/iroha_core/src/kura.rs",
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -17184,7 +15004,6 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / source_name, destination)
     copy_reviewed_rust_include_components(tmp_path)
-
     assert module._successor_production_source_fidelity_errors(tmp_path) == []
 
     path = tmp_path / relative_path
@@ -17268,7 +15087,11 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
     )
@@ -17372,33 +15195,49 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "live proposal safe-value call path",
         ),
         (
-            "runner_replay_owner_ignores_locked_subject",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "from_replayed_proposal",
-            "&& replayed.subject == locked_subject",
-            "&& true",
-            "exact replayed-proposal lock-owner authorization kernel",
-        ),
-        (
-            "runner_replay_projection_drops_subject",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "replayed_proposal_sign",
+            "recovered_attempt_mint_drops_subject",
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "from_control",
             "subject: proposal.subject,",
             "subject: wire::BlockSubject::default(),",
-            "replayed proposal tag/round/subject projection",
+            "WAL-authenticated opaque local-Proposal attempt mint",
         ),
         (
-            "runner_startup_disconnects_replay_owner",
+            "recovered_attempt_ignores_locked_subject",
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "exactly_matches_directive",
+            "&& self.subject == locked_subject",
+            "&& true",
+            "opaque recovered local-Proposal directive comparison",
+        ),
+        (
+            "preactivation_skips_opaque_attempt_comparison",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
+            "initialize_recovered_local_proposal",
+            "Some(recovered) if recovered.exactly_matches_directive(directive) => {",
+            "Some(recovered) if true => {",
+            "closed-ingress affine recovered Proposal join",
+        ),
+        (
+            "preactivation_skips_pristine_runner_gate",
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "run_inner",
-            "LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive)",
-            "LocalProposalState::from_replayed_proposal(None, initial_directive)",
-            "startup replay-owner handoff",
+            "bind_recovered_local_proposal",
+            "if !local_proposal.state.is_pristine() {",
+            "if false {",
+            "one-shot recovered Proposal bind into runner-local state",
+        ),
+        (
+            "activation_skips_affine_receipt_revalidation",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "activate_with",
+            "if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {",
+            "if false {",
+            "activation revalidation of the affine Proposal receipt",
         ),
         (
             "runner_non_validator_requests_locked_body",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "run_inner",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "run_lifecycle_active_height",
             "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
             "if lock_outcome == GlobalBodyLockOutcome::Inserted",
             "locked-body refinement evidence must be requested only by a local validator at exact first admission",
@@ -17526,10 +15365,10 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
         (
             "runner_replay_regression_accepts_foreign_subject",
             "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
-            "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+            "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
             'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
             "let foreign_lock = directive(Some(subject), None);",
-            "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles",
+            "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions",
         ),
         (
             "wal_high_subject",
@@ -18095,10 +15934,6 @@ def test_transport_hardening_production_source_mutations_fail_closed(
     assert any(error_fragment in error for error in errors), errors
 
 
-
-
-
-
 def test_reply_writer_deadline_formal_source_is_bound() -> None:
     module = load_checker()
 
@@ -18647,8 +16482,6 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
         "reviewed SHA-256" in error
         for error in errors
     ), errors
-
-
 
 
 @pytest.mark.parametrize(
@@ -19269,10 +17102,6 @@ def test_typed_rollover_handoff_rejects_unexpected_config(
         "typed rollover-handoff configuration inventory must equal" in error
         for error in errors
     ), errors
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -24613,17 +22442,17 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         (
             "reply_route_geometry",
             "exact_output",
-            "runner construction must pass the exact P2P source geometry into lane work",
+            "lifecycle construction must pass the exact P2P source geometry into lane work",
         ),
         (
             "watchdog_poll",
             "local_runner",
-            "every serialized height-loop iteration must poll the liveness watchdog",
+            "every ordinary serialized height-loop iteration must poll liveness",
         ),
         (
             "ordinary_ingress_cut",
             "local_runner",
-            "the ordinary height path must invoke the bounded serialized runtime against the live ingress high-watermark",
+            "the ordinary loop must retain its configured post-ingress runtime batch",
         ),
         (
             "retained_response_pacemaker",
@@ -24638,22 +22467,12 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         (
             "pending_recovery_wake_bound",
             "local_runner",
-            "pending-tip recovery must wait only for the lesser of its remaining deadline",
+            "closed pending recovery must wait only for the lesser of its remaining deadline",
         ),
         (
             "exact_admission_timed_continue",
             "local_runner",
-            "all four explicit serialized height-loop continue edges must be finitely timed",
-        ),
-        (
-            "serve_ingress_binding",
-            "exact_output",
-            "the runner must bind Serve and leader-wire ingress to one joint per-height queue owner",
-        ),
-        (
-            "locked_body_first_admission",
-            "locked_body",
-            "locked-body refinement evidence must be requested only by a local validator at exact first admission",
+            "ordinary loop's four explicit continue edges and loop tail must remain finitely timed",
         ),
         (
             "retained_response_timeout_turn",
@@ -24662,141 +22481,130 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
     ),
 )
-def test_run_inner_semantics_survive_all_reviewed_alias_digest_refreshes(
+def test_modular_runner_semantics_survive_their_item_digest_refreshes(
     tmp_path: Path,
     mutation: str,
     checker_name: str,
     expected_error: str,
 ) -> None:
-    """Every reviewed run-loop alias retains an independent semantic mutation."""
+    """Every modular run-loop owner retains an independent semantic mutation."""
 
     module = load_checker()
     formal_dir = reviewed_run_inner_fixture(tmp_path, module, checker_name)
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    ordinary_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
+    pending_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
+    )
     if mutation == "reply_route_geometry":
+        path, item_name = ordinary_path, "run_non_pending_lifecycle_loop"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
-            "network.reply_route_source_capacity(),",
-            "network.reply_route_source_capacity().saturating_sub(1),",
+            path,
+            item_name,
+            "let lane_work_limits = lane_work_limits(\n"
+            "            &shared_config,\n"
+            "            network.reply_route_source_capacity(),",
+            "let lane_work_limits = lane_work_limits(\n"
+            "            &shared_config,\n"
+            "            network.reply_route_source_capacity().saturating_sub(1),",
         )
     elif mutation == "watchdog_poll":
+        path, item_name = ordinary_path, "run_lifecycle_active_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
             "liveness_watchdog.poll(Instant::now());",
             "let _watchdog_now = Instant::now();",
         )
     elif mutation == "ordinary_ingress_cut":
+        path, item_name = ordinary_path, "run_lifecycle_active_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
+            "advance_executor(receiver, executor, services, control_queue_capacity)?;",
             "advance_executor(\n"
-            "                    &block_rx,\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
-            "advance_executor(\n"
-            "                    &mut executor,\n"
-            "                    &mut services,\n"
-            "                    control_queue_capacity,\n"
+            "                    receiver,\n"
+            "                    executor,\n"
+            "                    services,\n"
+            "                    control_queue_capacity.saturating_sub(1),\n"
             "                )?;",
         )
     elif mutation == "retained_response_pacemaker":
+        path, item_name = ordinary_path, "service_retained_certified_response"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
-            "advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;",
-            "let _ = (&block_rx, &mut executor, &mut services);",
+            path,
+            item_name,
+            "advance_pacemaker_once(receiver, executor, services)?;",
+            "let _ = (receiver, executor, services);",
         )
     elif mutation == "selected_serve_pacemaker":
+        path, item_name = ordinary_path, "service_certified_serve_barrier"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
             "service_certified_serve_barrier_liveness_turn(",
             "service_certified_serve_barrier_liveness_turn_for_test(",
         )
     elif mutation == "pending_recovery_wake_bound":
+        path, item_name = pending_path, "run_pending_kura_lifecycle_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
+            path,
+            item_name,
             "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
             "wake_rx.recv_timeout(remaining)",
         )
     elif mutation == "exact_admission_timed_continue":
+        path, item_name = ordinary_path, "run_lifecycle_active_height"
         mutate_rust_item_source(
             module,
-            runner_path,
-            "run_inner",
-            "let Some(_certified_serve_producer_episode) = services\n"
-            "                .try_begin_certified_serve_producer_episode()\n"
-            "                .map_err(V2RunnerError::Service)?\n"
-            "            else {\n"
-            "                // Exact admission won the queue-locked race after the\n"
-            "                // observation above. Restart at the dedicated target turn.\n"
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n"
-            "            };",
-            "let Some(_certified_serve_producer_episode) = services\n"
-            "                .try_begin_certified_serve_producer_episode()\n"
-            "                .map_err(V2RunnerError::Service)?\n"
-            "            else {\n"
-            "                continue;\n"
-            "            };",
-        )
-    elif mutation == "serve_ingress_binding":
-        mutate_rust_item_source(
-            module,
-            runner_path,
-            "run_inner",
-            "HeightIngressBindings::new(",
-            "HeightIngressBindings::new_for_test(",
-        )
-    elif mutation == "locked_body_first_admission":
-        mutate_rust_item_source(
-            module,
-            runner_path,
-            "run_inner",
-            "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
-            "if lock_outcome == GlobalBodyLockOutcome::Inserted",
+            path,
+            item_name,
+            "let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {\n"
+            "            let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
+            "            continue;\n"
+            "        };",
+            "let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {\n"
+            "            let _ = wake_rx.recv();\n"
+            "            continue;\n"
+            "        };",
         )
     else:
-        source = runner_path.read_text(encoding="utf-8")
-        region_start = source.index("                if response_backpressured {")
-        region_end = source.index(
-            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
-            region_start,
-        )
-        region = source[region_start:region_end]
-        old = "V2IngressDrainMode::TimeoutVoteEpisode"
-        assert region.count(old) == 1
-        mutated_region = region.replace(old, "V2IngressDrainMode::Ordinary", 1)
-        runner_path.write_text(
-            source[:region_start] + mutated_region + source[region_end:],
-            encoding="utf-8",
+        path, item_name = ordinary_path, "service_retained_certified_response"
+        mutate_rust_item_source(
+            module,
+            path,
+            item_name,
+            "V2IngressDrainMode::TimeoutVoteEpisode,",
+            "V2IngressDrainMode::Ordinary,",
         )
 
-    mutated_items = module.rust_items(
-        runner_path.read_text(encoding="utf-8"), "run_inner"
-    )
+    mutated_items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
     assert len(mutated_items) == 1
     digest = module._rust_item_token_sha256(mutated_items[0])
-    module._PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256["run_inner"] = digest
-    module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256["run_inner"] = digest
-    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256["run_inner"] = digest
-    module._PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-        "runner::run_inner"
-    ] = digest
-    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256["runner::run_inner"] = digest
-    module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256["run_inner"] = digest
-    module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
+    if checker_name == "exact_output":
+        module._PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256["ordinary_loop"] = digest
+    elif checker_name == "timeout_vote_episode":
+        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
+            "lifecycle_runner::service_certified_serve_barrier"
+        ] = digest
+    elif checker_name == "retained_response":
+        module._PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
+            "lifecycle_runner::service_retained_certified_response"
+        ] = digest
+    else:
+        role = "pending" if path == pending_path else "ordinary"
+        module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
+            f"{role}::{item_name}"
+        ] = digest
 
     errors = reviewed_run_inner_source_fidelity_errors(
         module, tmp_path, formal_dir, checker_name
@@ -25993,11 +23801,11 @@ def test_timeout_vote_episode_runner_mode_inventory_mutation(
         ),
         (
             "remove_selected_serve_timeout_turn",
-            "selected Serve must keep certificate escape inside",
+            "selected Serve must close its move-only predecessor admission before mapping the complete timeout-recovery suffix independently of it",
         ),
         (
-            "move_selected_serve_timeout_turn_under_claim",
-            "selected Serve must keep certificate escape inside",
+            "couple_selected_serve_liveness_to_predecessor",
+            "selected Serve must close its move-only predecessor admission before mapping the complete timeout-recovery suffix independently of it",
         ),
     ),
 )
@@ -26006,63 +23814,49 @@ def test_timeout_vote_episode_runner_schedule_mutations(
     mutation: str,
     expected_error: str,
 ) -> None:
-    """Both TimeoutVote turns are unconditional and Serve does not spend its claim."""
+    """Both TimeoutVote turns are unconditional and independent of the aperture."""
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    source = runner.read_text(encoding="utf-8")
+    relative = Path(
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    )
+    runner = tmp_path / relative
 
     if mutation == "remove_retained_response_timeout_turn":
-        region_start = source.index("                if response_backpressured {")
-        region_end = source.index(
-            "                    executor.reconcile_retained_response_certified_fence_escape_phase();",
-            region_start,
-        )
-        region = source[region_start:region_end]
-        call_start = region.rfind("                    drain_v2_ingress(")
-        assert call_start >= 0
-        call_end = region.index("                    )?;\n", call_start) + len(
-            "                    )?;\n"
-        )
-        mutated_region = region[:call_start] + region[call_end:]
-        source = source[:region_start] + mutated_region + source[region_end:]
+        item_name = "service_retained_certified_response"
+        old = """        drain_v2_ingress(
+            receiver,
+            executor,
+            services,
+            lane_work,
+            output_guard,
+            kura,
+            key_pair,
+            block_sync_server,
+            block_sync,
+            block_sync_request,
+            npos_vrf,
+            V2IngressDrainMode::TimeoutVoteEpisode,
+            1,
+        )?;
+"""
+        new = ""
     elif mutation == "remove_selected_serve_timeout_turn":
-        region_start = source.index(
-            "                service_certified_serve_barrier_liveness_turn("
-        )
-        region_end = source.index(
-            "                if !older_predecessor_remains {",
-            region_start,
-        )
-        region = source[region_start:region_end]
+        item_name = "service_certified_serve_barrier"
         old = "V2IngressDrainMode::TimeoutVoteEpisode"
-        assert region.count(old) == 1
-        mutated_region = region.replace(
-            old, "V2IngressDrainMode::Ordinary", 1
-        )
-        source = source[:region_start] + mutated_region + source[region_end:]
+        new = "V2IngressDrainMode::Ordinary"
     else:
-        before = (
-            "                service_certified_serve_barrier_liveness_turn(\n"
-            "                    recovering_interrupted_tip,\n"
-            "                    claimed_older_runtime_episode,\n"
-        )
-        under_claim = (
-            "                service_certified_serve_barrier_liveness_turn(\n"
-            "                    recovering_interrupted_tip\n"
-            "                        || !claimed_older_runtime_episode,\n"
-            "                    claimed_older_runtime_episode,\n"
-        )
-        assert source.count(before) == 1
-        source = source.replace(before, under_claim, 1)
+        item_name = "service_certified_serve_barrier"
+        old = "service_certified_serve_barrier_liveness_turn(false, |action| match action {"
+        new = "service_certified_serve_barrier_liveness_turn(older_predecessor_remains, |action| match action {"
 
-    runner.write_text(source, encoding="utf-8")
+    mutate_rust_item_source(module, runner, item_name, old, new)
     rebind_timeout_vote_episode_rust_item_seal(
         module,
         tmp_path,
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        "run_inner",
+        relative,
+        item_name,
     )
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
@@ -31169,13 +28963,10 @@ SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS = (
             "lifecycle capacity must charge configured effect work",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-            "            usize::try_from("
-            "shared_config.limits.runtime_command_capacity)?,\n"
-            "            effect_work_capacity,",
-            "            effect_work_capacity,\n"
-            "            effect_work_capacity,",
-            "V4 serviced-candidate item run_inner",
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
+            "            inputs.effect_queue,",
+            "            EffectQueueConfig::default(),",
+            "V4 serviced-candidate item launch",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -31669,14 +29460,14 @@ def test_serviced_candidate_reviewed_runtime_items_survive_digest_refresh(
             "live dispatch completion must retain successors, acknowledge the exact producer",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            Path("crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"),
             "            lifecycle_ordinals\n"
             "                .advance_past(high_watermark)\n"
-            "                .map_err(V2RunnerError::Service)?;",
+            "                .map_err(ProductionLifecycleLaunchErrorV1::LeaderWire)?;",
             "            let _ = high_watermark;",
-            "_SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256",
-            "run_inner",
-            "run_inner",
+            "_SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256",
+            "launch",
+            "launch",
             "both restored high-waters must advance the shared source",
         ),
         (
@@ -31762,8 +29553,6 @@ def test_serviced_candidate_v4_semantics_survive_item_digest_refresh(
     assert len(items) == 1
     digest = module._rust_item_token_sha256(items[0])
     getattr(module, digest_name)[digest_key] = digest
-    if relative == Path("crates/iroha_core/src/sumeragi/v2_runner.rs"):
-        module._SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256["run_inner"] = digest
 
     errors = module._serviced_candidate_production_source_fidelity_errors(
         tmp_path
@@ -41072,8 +38861,6 @@ pub async fn destructured_start(Config { max_frame_bytes, .. }: Config) {
     assert module_inner[0].ancestor_inner_attributes == (
         "#![cfg_attr(feature = \"ship\", cfg(any()))]",
     )
-
-
 
 
 for _proof_ledger_test_component in PROOF_LEDGER_TEST_COMPONENT_FILES:

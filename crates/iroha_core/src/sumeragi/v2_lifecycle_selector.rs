@@ -1665,8 +1665,9 @@ impl PreparedLifecycleIngressSelector {
             .selected_certified_fetch_ready_authority()
             .map_err(|error| format!("selected Fetch authority rejected: {error:?}"))?;
         let expected_effect = incumbent_effect.clone();
-        let incumbent = ConcreteLifecycleWork::from_exact(incumbent_effect, incumbent_pending)
-            .map_err(|(error, _, _)| format!("exact Fetch incumbent rejected: {error:?}"))?;
+        let incumbent =
+            ConcreteLifecycleWork::from_inert_fixture_for_test(incumbent_effect, incumbent_pending)
+                .map_err(|(error, _, _)| format!("exact Fetch incumbent rejected: {error:?}"))?;
         if incumbent.causal_root() != ready.causal_root {
             return Err("real Fetch incumbent differs from selector causal authority".to_owned());
         }
@@ -2565,8 +2566,8 @@ impl<R: crate::sumeragi::v2_effects::EffectRuntime> V2EffectExecutor<R> {
     /// `None` for pass-through; no later recovered response may leapfrog it.
     /// Neither selection nor classification claims, dequeues, or publishes
     /// worker capacity.
-    // TODO: Consume this queue-owned selector only from the unified lifecycle
-    // Ingress-turn driver when the atomic runner cutover replaces raw dequeue.
+    // The production lifecycle Ingress turn is the sole consumer of this
+    // queue-owned selector; ordinary winners retain the same fair cut.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(
         &self,

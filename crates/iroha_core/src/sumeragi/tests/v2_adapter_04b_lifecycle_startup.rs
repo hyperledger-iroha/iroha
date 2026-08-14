@@ -1,3 +1,6 @@
+#[cfg(feature = "bls")]
+use crate::{BlockMessage, state::State};
+
 #[test]
 fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
@@ -179,7 +182,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     let leader_wire_ingress = Arc::new(
         crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
-            512 * 1024 * 1024,
+            640 * 1024 * 1024,
             128 * 1024 * 1024,
             32 * 1024 * 1024,
             32 * 1024 * 1024,
@@ -303,7 +306,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     assert_eq!(joined_directive, directive);
     assert!(local_proposal_state.already_attempted(directive));
 
-    let activated = launched
+    let mut activated = launched
         .activate(Instant::now(), activation, local_proposal_state)
         .unwrap_or_else(|error| panic!("activate exact Kura-bound lifecycle owner: {error}"));
     assert!(ingress_ready.load(Ordering::Acquire));
@@ -313,6 +316,16 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
             .expect("sealed lifecycle activation publishes status")
             .height_context_id,
         context.id()
+    );
+    let mut active_runner =
+        super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+    activated.with_runner_runtime(
+        &mut active_runner,
+        |_owner, executor, services, local_proposal| {
+            assert_eq!(executor.context(), &context);
+            assert!(services.matches_lifecycle_executor_output_guard(executor));
+            assert!(local_proposal.already_attempted(directive));
+        },
     );
     let finality_subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -492,6 +505,150 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
     );
     assert!(!wrong_storage_root.join("lifecycle-v1").exists());
     crate::sumeragi::status::clear_v2_status();
+}
+
+#[cfg(feature = "bls")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    crate::sumeragi::status::clear_v2_status();
+    let (kura, verified, local_signer, retirement) =
+        super::super::v2_lifecycle_coordinator::complete_tip_lifecycle_shutdown_fixture();
+    let context = verified.context().clone();
+    let local_peer = PeerId::new(local_signer.public_key().clone());
+    let local_validator = context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == local_peer)
+        .and_then(|position| u32::try_from(position).ok())
+        .expect("CompleteTip shutdown signer belongs to the H+1 roster");
+    let storage_root = kura.sumeragi_v2_storage_root();
+    let wal_path = storage_root
+        .join("wal")
+        .join(format!("{:020}.wal", context.height));
+    let authenticated = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+        wal_path,
+        verified.clone(),
+        Some(local_validator),
+        reducer::Generation::new(1),
+        [0x4D; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("open sealed empty H+1 adapter startup")
+    .authenticate_final_wal_startup_authority()
+    .unwrap_or_else(|(error, _startup)| {
+        panic!("authenticate empty CompleteTip successor WAL: {error}")
+    });
+    let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
+    let body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+        storage_root.join("bodies"),
+        context.clone(),
+        signature_policy.clone(),
+    )
+    .expect("open canonical H+1 body store");
+    let body_store = quarantined_lifecycle_body_store_for_test(body_store);
+    let storage_authority = RecoveredLifecycleStorageAuthorityV1::for_test(
+        kura.as_ref(),
+        &verified,
+        signature_policy,
+        AccountId::new(local_signer.public_key().clone()),
+    );
+    let state = lifecycle_factory_state_for_test(Arc::clone(&kura), context.network_id);
+    let factory_inputs = try_lifecycle_factory_inputs_for_test(
+        &authenticated,
+        storage_authority,
+        Arc::clone(&state),
+        Arc::clone(&kura),
+        &local_signer,
+    )
+    .unwrap_or_else(|error| panic!("bind CompleteTip H+1 lifecycle inputs: {error}"));
+    let owner = authenticated
+        .open_production_lifecycle_owner_v1(
+            &lifecycle_owner_config(),
+            4,
+            factory_inputs,
+            body_store,
+        )
+        .unwrap_or_else(|error| panic!("open CompleteTip H+1 lifecycle owner: {error}"));
+    let ingress = Arc::new(
+        crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            64,
+            640 * 1024 * 1024,
+            128 * 1024 * 1024,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        ),
+    );
+    ingress
+        .configure_roster_for_context(
+            context.roster.iter().map(|entry| entry.validator.clone()),
+            &context.network_id,
+            context.da_layout,
+        )
+        .expect("configure CompleteTip H+1 lifecycle ingress");
+    ingress.require_certified_serve_gate();
+    ingress.require_leader_wire_lifecycle_gate();
+    let ingress_ready = Arc::new(AtomicBool::new(false));
+    let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+    let launched_at = Instant::now();
+    let kura_replica_advert_refresh = Arc::new(
+        super::super::v2_worker::KuraReplicaAdvertRefreshOwner::from_kura(
+            kura.as_ref(),
+            launched_at,
+        )
+        .expect("bind CompleteTip H+1 Kura advert source"),
+    );
+    let (exact_output_handoff_owner, _transport_owner) =
+        super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let launch_inputs =
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
+            launched_at,
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::default(),
+            super::super::v2_effects::EffectQueueConfig::default(),
+            local_peer,
+            Some(local_validator),
+            local_signer,
+            crate::IrohaNetwork::closed_for_tests(),
+            state,
+            Arc::clone(&kura),
+            None,
+            64,
+            64,
+            64,
+            Arc::clone(&output_guard),
+            Arc::clone(&ingress),
+            kura_replica_advert_refresh,
+            exact_output_handoff_owner,
+        );
+    let setup_context =
+        super::super::v2_runner::lifecycle_run_inner::launch_non_pending_lifecycle_height_and_shutdown_for_test(
+            owner,
+            launch_inputs,
+            Some(retirement),
+            &ingress_ready,
+            &ingress,
+        )
+        .unwrap_or_else(|error| panic!("launch and stop sealed CompleteTip H+1 owner: {error}"));
+    assert_eq!(setup_context, context.id());
+
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    let ingress_state = ingress.state.lock();
+    assert!(!ingress_state.open);
+    assert!(ingress_state.certified_serve_gate.is_none());
+    assert!(ingress_state.leader_wire_lifecycle_gate.is_none());
+    drop(ingress_state);
+    assert!(!output_guard.restart_required());
+    assert!(crate::sumeragi::status::v2_status().is_none());
 }
 
 #[test]
@@ -676,17 +833,276 @@ fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
 }
 
 #[cfg(feature = "bls")]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn exercise_pending_kura_production_lifecycle(
+    owner: super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
+    verified: VerifiedHeightContext,
+    context: wire::HeightContext,
+    state: Arc<State>,
+    queue: Arc<crate::queue::Queue>,
+    kura: Arc<Kura>,
+    local_signer: KeyPair,
+    expected: super::super::v2_recovery::PendingKuraApply,
+    finalize: bool,
+) {
+    let local_peer = PeerId::new(local_signer.public_key().clone());
+    let local_validator = context
+        .roster
+        .iter()
+        .position(|entry| entry.validator == local_peer)
+        .and_then(|position| u32::try_from(position).ok())
+        .expect("pending Kura lifecycle signer belongs to the verified roster");
+    let leader_wire_ingress = Arc::new(
+        crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            64,
+            640 * 1024 * 1024,
+            128 * 1024 * 1024,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            32 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        ),
+    );
+    leader_wire_ingress
+        .configure_roster_for_context(
+            context.roster.iter().map(|entry| entry.validator.clone()),
+            &context.network_id,
+            context.da_layout,
+        )
+        .expect("configure pending Kura lifecycle ingress");
+    leader_wire_ingress.require_certified_serve_gate();
+    leader_wire_ingress.require_leader_wire_lifecycle_gate();
+    let ingress_ready = Arc::new(AtomicBool::new(false));
+    let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+    let launched_at = Instant::now();
+    let kura_replica_advert_refresh = Arc::new(
+        super::super::v2_worker::KuraReplicaAdvertRefreshOwner::from_kura(
+            kura.as_ref(),
+            launched_at,
+        )
+        .expect("bind pending Kura advert source"),
+    );
+    let (exact_output_handoff_owner, transport_owner) =
+        super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let launch_inputs =
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
+            launched_at,
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::default(),
+            super::super::v2_effects::EffectQueueConfig::default(),
+            local_peer.clone(),
+            Some(local_validator),
+            local_signer.clone(),
+            crate::IrohaNetwork::closed_for_tests(),
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            None,
+            64,
+            8,
+            64,
+            Arc::clone(&output_guard),
+            Arc::clone(&leader_wire_ingress),
+            kura_replica_advert_refresh,
+            exact_output_handoff_owner,
+        );
+    let launched = owner
+        .launch(launch_inputs)
+        .unwrap_or_else(|error| panic!("launch pending Kura lifecycle owner: {error}"));
+    let mut setup_runner =
+        super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
+    let activation =
+        super::super::v2_runner::ProductionLifecyclePendingKuraRunnerActivationV1::for_test(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&leader_wire_ingress),
+        );
+    let mut pending = launched
+        .install_pending_kura_apply(&mut setup_runner)
+        .unwrap_or_else(|error| panic!("install exact pending Kura replay: {error}"));
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!leader_wire_ingress.state.lock().open);
+    assert!(crate::sumeragi::status::v2_status().is_none());
+
+    let completion_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let progress = pending
+            .drive_apply_recovery_turn(&mut setup_runner, 64)
+            .unwrap_or_else(|error| panic!("drive pending Kura Apply recovery: {error}"));
+        pending
+            .with_runner_setup(&mut setup_runner, |executor, services| {
+                assert!(executor.lifecycle_live_clocks_are_unarmed());
+                assert!(services.matches_installed_pending_kura_tip(expected));
+                Ok::<
+                    _,
+                    super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
+                >(())
+            })
+            .expect("inspect closed pending Kura lifecycle");
+        assert!(!ingress_ready.load(Ordering::Acquire));
+        assert!(!leader_wire_ingress.state.lock().open);
+        assert!(crate::sumeragi::status::v2_status().is_none());
+        if matches!(
+            progress,
+            super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Completed { .. }
+        ) {
+            break;
+        }
+        if Instant::now() >= completion_deadline {
+            panic!("timed out waiting for pending Kura Apply completion");
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        u64::try_from(state.committed_height()).expect("pending Kura State height fits u64"),
+        expected.height()
+    );
+    assert_eq!(
+        kura.get_block(std::num::NonZeroUsize::new(1).expect("pending Kura height"))
+            .expect("read applied pending Kura block")
+            .hash(),
+        expected.block_hash()
+    );
+
+    let prepared = pending
+        .prepare_lane_recovery(
+            &mut setup_runner,
+            &queue,
+            |installed, _executor, _services| {
+                assert_eq!(installed, expected);
+                super::super::v2_lane_work::V2LaneWorkAdapter::pending_kura_lifecycle_fixture_for_test(
+                    verified.context().clone(),
+                    local_peer,
+                    local_signer,
+                    Arc::clone(&state),
+                    Arc::clone(&kura),
+                    installed,
+                    Arc::clone(&output_guard),
+                    transport_owner,
+                )
+                .map_err(super::super::v2_runner::V2RunnerError::from)
+            },
+        )
+        .unwrap_or_else(|error| panic!("prepare affine pending Kura lane recovery: {error}"));
+    let mut activated = prepared
+        .activate_no_clock(activation)
+        .unwrap_or_else(|error| panic!("activate exact pending Kura no-clock lifecycle: {error}"));
+    assert!(ingress_ready.load(Ordering::Acquire));
+    assert!(leader_wire_ingress.state.lock().open);
+    assert!(crate::sumeragi::status::v2_status().is_some());
+    let mut active_runner =
+        super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+    activated.with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+        assert!(executor.lifecycle_live_clocks_are_unarmed());
+        assert!(executor.ready_to_finish());
+        assert!(services.matches_installed_pending_kura_tip(expected));
+        assert!(services.matches_lifecycle_lane_work(lane_work));
+    });
+
+    if !finalize {
+        activated
+            .into_clean_shutdown(&mut active_runner)
+            .unwrap_or_else(|error| panic!("cleanly stop active pending Kura lifecycle: {error}"));
+        assert!(!ingress_ready.load(Ordering::Acquire));
+        assert!(!leader_wire_ingress.state.lock().open);
+        assert!(!output_guard.restart_required());
+        crate::sumeragi::status::clear_v2_status();
+        return;
+    }
+
+    let producer_episode = activated
+        .with_runner_runtime(&mut active_runner, |_executor, services, _lane_work| {
+            services.try_begin_certified_serve_producer_episode()
+        })
+        .expect("query exact pending Kura producer episode")
+        .expect("claim pending Kura producer episode");
+    let (finalized, mut lane_work) = activated
+        .into_finalized_rollover(&mut active_runner)
+        .unwrap_or_else(|error| panic!("finalize pending Kura lifecycle owner: {error}"));
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(!leader_wire_ingress.state.lock().open);
+    drop(producer_episode);
+    let (_, artifact) = finalized.finality();
+    lane_work
+        .retain_merge_sidecars_for_global_view(
+            artifact.commit_qc.round.view,
+            None,
+            Some(artifact.subject),
+        )
+        .unwrap_or_else(|error| panic!("retain pending Kura Decision sidecar: {error}"));
+    let mut successor = context;
+    successor.height = successor
+        .height
+        .checked_add(1)
+        .expect("pending Kura successor height remains in range");
+    successor.parent_commit_qc = Some(artifact.commit_qc.clone());
+    successor
+        .validate()
+        .expect("pending Kura successor context is valid");
+    let (post_output, retained_sidecars) = finalized
+        .rollover_outputs(&mut active_runner, lane_work, &successor, 64)
+        .unwrap_or_else(|error| panic!("roll over pending Kura lifecycle outputs: {error}"));
+    let cleanup_ready = post_output
+        .retire_lifecycle_stores()
+        .unwrap_or_else(|error| panic!("retire pending Kura lifecycle stores: {error}"));
+    let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
+    let outcome = cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor);
+    drop(retained_sidecars);
+    assert!(outcome.cleanup().warnings().is_empty());
+    assert!(outcome.wal_retirement_warning().is_none());
+    assert!(!output_guard.restart_required());
+    crate::sumeragi::status::clear_v2_status();
+}
+
+#[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies() {
+    if std::thread::current().name() != Some("production-lifecycle-marker-replay") {
+        return run_marker_replay_test_on_stack();
+    }
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
-    for (marker, persist_matching_outcome) in [(0xB1_u8, true), (0xB2_u8, false)] {
+    for (
+        marker,
+        persist_matching_outcome,
+        shutdown_before_activation,
+        shutdown_after_activation,
+        pending_kura_finalize,
+    ) in [
+        (0xB1_u8, true, false, false, None),
+        (0xB2_u8, false, false, false, None),
+        (0xB3_u8, true, true, false, None),
+        (0xB4_u8, true, false, true, None),
+        (0xB5_u8, true, false, false, Some(false)),
+        (0xB6_u8, true, false, false, Some(true)),
+    ] {
         let kura = Kura::blank_kura_for_testing();
         let storage_root = kura.sumeragi_v2_storage_root();
         let (mut recovered_context, keys, proofs) = authenticated_context();
-        let state =
-            lifecycle_factory_state_for_test(Arc::clone(&kura), recovered_context.network_id);
+        let genesis_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
+            .expect("deterministic production marker-replay genesis key");
+        let genesis_account = AccountId::new(genesis_key.public_key().clone());
+        let state = Arc::new(
+            crate::state::State::new_with_chain_and_network_id_for_testing(
+                crate::state::World::with(
+                    [],
+                    [iroha_data_model::Registrable::build(
+                        iroha_data_model::account::Account::new(genesis_account.clone()),
+                        &genesis_account,
+                    )],
+                    [],
+                ),
+                Arc::clone(&kura),
+                crate::query::store::LiveQueryStore::start_test(),
+                "sumeragi-v2-lifecycle-test"
+                    .parse()
+                    .expect("lifecycle fixture chain id"),
+                recovered_context.network_id,
+            ),
+        );
         recovered_context.nexus_amx_context_hash =
             super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
         recovered_context.execution_policy_hash =
@@ -700,9 +1116,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             iroha_config::parameters::actual::Queue::default(),
             events_sender.clone(),
         ));
-        let genesis_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
-            .expect("deterministic production marker-replay genesis key");
-        let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let semantic_probe = super::super::v2_apply::V2ApplyService::new(
             Arc::clone(&state),
             Arc::clone(&queue),
@@ -723,9 +1136,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             genesis_account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([iroha_data_model::isi::Log::new(
-            iroha_data_model::Level::INFO,
-            format!("production recovered marker {marker:02x}"),
+        .with_instructions([iroha_data_model::isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Sumeragi(
+                iroha_data_model::parameter::SumeragiParameter::MaxClockDriftMs(u64::from(marker)),
+            ),
         )])
         .sign(genesis_key.private_key());
         let creation_time_ms = (transaction.creation_time() + Duration::from_millis(1))
@@ -795,20 +1209,133 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         let durable = body_store
             .store(manifest.clone(), canonical_wire.clone())
             .expect("persist production marker-replay body");
-        if persist_matching_outcome {
-            body_store
+        let validated_receipt = if persist_matching_outcome {
+            let outcome = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Ok::<_, String>(semantic_commitment)
                 })
                 .expect("persist matching semantic marker");
+            Some(
+                outcome
+                    .validated_receipt()
+                    .expect("matching semantic outcome is validated")
+                    .clone(),
+            )
         } else {
-            body_store
+            let _ = body_store
                 .execute_durable_validation(durable.clone(), durable.manifest_hash(), |_| {
                     Err::<wire::ExecutionCommitment, _>(
                         "deliberately mismatched recovered rejection".to_owned(),
                     )
                 })
                 .expect("persist mismatched semantic marker");
+            None
+        };
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: semantic_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, &keys);
+
+        if let Some(finalize) = pending_kura_finalize {
+            let task = super::super::v2_effects::ApplyTask::for_test(
+                u64::from(marker),
+                super::super::v2_core::EventTag::new(
+                    recovered_context.height,
+                    round.view,
+                    super::super::v2_core::Generation::INITIAL,
+                ),
+                subject,
+                decision.clone(),
+                validated_receipt.expect("pending Kura fixture has a validated body"),
+            );
+            semantic_probe.fail_after_kura_store_for_test();
+            assert!(matches!(
+                semantic_probe.execute(&recovered_context, &mut body_store, &task),
+                Err(super::super::v2_apply::V2ApplyError::InjectedCrashAfterKuraStore)
+            ));
+            drop(body_store);
+            assert_eq!(state.committed_height(), 0);
+            assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
+            let expected = super::super::v2_recovery::PendingKuraApply::for_test(
+                recovered_context.id(),
+                recovered_context.height,
+                subject.block_hash,
+            );
+            let recovered_body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+                storage_root.join("bodies"),
+                recovered_context.clone(),
+                signature_policy.clone(),
+            )
+            .expect("reopen pending Kura body store")
+            .into_quarantined_recovered_startup()
+            .expect("quarantine pending Kura validation markers");
+            let wal_path = storage_root
+                .join("wal")
+                .join(format!("{:020}.wal", recovered_context.height));
+            let authenticated = write_and_reopen_authenticated_wal_startup_at_path(
+                wal_path,
+                &recovered_context,
+                &proofs,
+                0,
+                [marker; 32],
+                vec![WalRecordV2::Decision(decision.clone())],
+            )
+            .bind_pending_kura_apply(expected)
+            .unwrap_or_else(|(error, _startup)| panic!("bind exact pending Kura startup: {error}"))
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|error| panic!("authenticate pending Kura WAL replay: {error}"));
+            let verified =
+                VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
+                    .expect("verify pending Kura lifecycle context");
+            let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
+                kura.as_ref(),
+                &verified,
+                signature_policy.clone(),
+                genesis_account.clone(),
+            );
+            let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+                .expect("deterministic pending Kura Serve signer");
+            let factory_inputs = authenticated
+                .bind_production_lifecycle_owner_factory_inputs_v1(
+                    super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
+                        local_signer.clone(),
+                        state.sumeragi_block_cadence(),
+                    ),
+                    storage,
+                    Arc::clone(&state),
+                    Arc::clone(&queue),
+                    Arc::clone(&kura),
+                    None,
+                    None,
+                    events_sender.clone(),
+                )
+                .unwrap_or_else(|error| panic!("bind pending Kura lifecycle inputs: {error}"));
+            let owner = authenticated
+                .open_production_lifecycle_owner_v1(
+                    &lifecycle_owner_config(),
+                    4,
+                    factory_inputs,
+                    recovered_body_store,
+                )
+                .unwrap_or_else(|error| panic!("open pending Kura lifecycle owner: {error}"));
+            exercise_pending_kura_production_lifecycle(
+                owner,
+                verified,
+                recovered_context,
+                state,
+                queue,
+                kura,
+                local_signer,
+                expected,
+                finalize,
+            );
+            continue;
         }
         let prepromoted_error = match body_store.into_quarantined_recovered_startup() {
             Ok(_body_store) => {
@@ -825,16 +1352,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             "pre-promoted marker rejection must precede lifecycle-store creation"
         );
 
-        let mut decision = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment: semantic_commitment,
-            signers: vec![0, 1, 2],
-            aggregate_signature: Vec::new(),
-        };
-        authenticate_qc(&mut decision, &keys);
         let wal_path = storage_root
             .join("wal")
             .join(format!("{:020}.wal", recovered_context.height));
@@ -908,7 +1425,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let leader_wire_ingress = Arc::new(
                 crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
                     64,
-                    512 * 1024 * 1024,
+                    640 * 1024 * 1024,
                     128 * 1024 * 1024,
                     32 * 1024 * 1024,
                     32 * 1024 * 1024,
@@ -976,9 +1493,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     kura_replica_advert_refresh,
                     exact_output_handoff_owner,
                 );
-            let mut launched = owner
-                .launch(launch_inputs)
-                .unwrap_or_else(|error| panic!("launch recovered-Apply lifecycle owner: {error}"));
             use super::super::{
                 v2_lifecycle_coordinator::{
                     ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
@@ -991,6 +1505,28 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 },
             };
 
+            if shutdown_before_activation {
+                let setup_context = super::super::v2_runner::lifecycle_run_inner::
+                    launch_non_pending_lifecycle_height_and_shutdown_for_test(
+                        owner,
+                        launch_inputs,
+                        None,
+                        &ingress_ready,
+                        &leader_wire_ingress,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("launch and stop unpublished lifecycle owner: {error}")
+                    });
+                assert_eq!(setup_context, recovered_context.id());
+                assert!(!ingress_ready.load(Ordering::Acquire));
+                assert!(!leader_wire_ingress.state.lock().open);
+                assert!(!output_guard.restart_required());
+                assert!(crate::sumeragi::status::v2_status().is_none());
+                continue;
+            }
+            let mut launched = owner
+                .launch(launch_inputs)
+                .unwrap_or_else(|error| panic!("launch recovered-Apply lifecycle owner: {error}"));
             let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test();
             let setup_tag = launched
                 .with_runner_setup(&mut setup_runner, |executor, services| {
@@ -1114,7 +1650,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                                 ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred,
                             ) => panic!("empty recovered block must not need a merge sidecar"),
                             ProductionLifecycleCompletionTurnV1::Selected(_) => {
-                                panic!("recovered Apply completion selected an unexpected class")
+                                panic!("recovered Apply completion selected the wrong lifecycle class")
                             }
                         }
                     },
@@ -1159,7 +1695,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
 
             let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
             assert!(matches!(
                 leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
@@ -1296,33 +1832,43 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
 
-            let local_validator_index =
-                usize::try_from(local_validator).expect("marker-replay validator index fits usize");
-            let rejected_requester_index = (local_validator_index + 1) % keys.len();
-            let admitted_requester_index = (local_validator_index + 2) % keys.len();
-            let non_local_signers = (0..keys.len())
-                .filter(|index| *index != local_validator_index)
-                .collect::<Vec<_>>();
-            let all_signers = (0..keys.len()).collect::<Vec<_>>();
-            let (rejected_serve, _rejected_pops) =
-                super::super::v2_worker::tests::production_authenticated_serve_request(
+            let batch_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
+            ));
+            assert!(matches!(
+                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
+                    batch_message,
+                    Some(local_peer.clone()),
+                )),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let mut batch_runner =
+                super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+            super::super::v2_runner::drain_lifecycle_v2_ingress(
+                &mut activated,
+                &mut batch_runner,
+                &leader_wire_ingress,
+                &mut lane_work,
+                kura.as_ref(),
+                &local_signer,
+                &mut block_sync_server,
+                &mut block_sync,
+                &mut block_sync_request,
+                &mut npos_vrf,
+                1,
+            )
+            .expect("drain one exact lifecycle-owned ordinary batch");
+            assert_eq!(leader_wire_ingress.len(), 0);
+            assert!(!output_guard.restart_required());
+
+            let (rejected_serve, admitted_serve) =
+                production_serve_requests_for_execution_commitment(
                     &recovered_context,
                     &keys,
-                    &keys[rejected_requester_index],
+                    local_validator,
                     round,
                     subject,
-                    wire::GlobalPhase::Commit,
-                    &non_local_signers,
-                );
-            let (admitted_serve, _admitted_pops) =
-                super::super::v2_worker::tests::production_authenticated_serve_request(
-                    &recovered_context,
-                    &keys,
-                    &keys[admitted_requester_index],
-                    round,
-                    subject,
-                    wire::GlobalPhase::Commit,
-                    &all_signers,
+                    semantic_commitment,
                 );
             assert!(matches!(
                 leader_wire_ingress.try_push(
@@ -1373,11 +1919,14 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let rejected_settlement = activated
                 .settle_prepared_certified_serve_for_test(&mut serve_runner, rejected_turn)
                 .expect("retire exact deterministic Serve negative");
-            assert!(matches!(
-                rejected_settlement,
-                ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)
-                    if reason.contains("not a certified-body retention owner")
-            ));
+            assert!(
+                matches!(
+                    &rejected_settlement,
+                    ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)
+                        if reason.contains("not a certified-body retention owner")
+                ),
+                "unexpected rejected-Serve settlement: {rejected_settlement:?}"
+            );
             assert_eq!(leader_wire_ingress.len(), 1);
             assert!(!output_guard.restart_required());
 
@@ -1441,20 +1990,29 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             assert_eq!(leader_wire_ingress.len(), 0);
             assert_eq!(
                 activated
-                    .settle_prepared_certified_serve_for_test(&mut serve_runner, admitted_turn,)
-                    .expect("abort exact admitted Serve before worker commit"),
-                ProductionPreparedCertifiedServeTestSettlementV1::AdmittedAborted
+                    .consume_prepared_ordinary_ingress_turn(
+                        &mut serve_runner,
+                        admitted_turn,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &local_signer,
+                        &mut block_sync_server,
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        &mut npos_vrf,
+                    )
+                    .expect("consume exact admitted Serve handoff"),
+                super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
             );
             assert!(
                 activated
                     .certified_serve_owners_are_clear_for_test()
                     .expect("inspect cleared Serve owners")
             );
-            assert!(
-                activated
-                    .discharge_certified_serve_producer_episode_for_test()
-                    .expect("finish the due local-producer episode")
-            );
+            let producer_episode = activated
+                .take_certified_serve_producer_episode_for_test()
+                .expect("claim the due local-producer episode");
+            assert!(producer_episode.is_some());
             assert!(!output_guard.restart_required());
 
             let ((), after_activated_ingress_pass_through) =
@@ -1478,45 +2036,56 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             let mut runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            let finalized = activated
-                .into_finalized_rollover(&mut runner)
+            if shutdown_after_activation {
+                activated
+                    .into_clean_shutdown(&mut runner)
+                    .unwrap_or_else(|error| panic!("cleanly stop active lifecycle owner: {error}"));
+                drop(producer_episode);
+                assert!(!ingress_ready.load(Ordering::Acquire));
+                assert!(!leader_wire_ingress.state.lock().open);
+                assert!(!output_guard.restart_required());
+                assert!(crate::sumeragi::status::v2_status().is_some());
+                crate::sumeragi::status::clear_v2_status();
+                continue;
+            }
+            let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
+            let ((), retained_sidecars, outcome) =
+                super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(
+                    activated,
+                    &mut runner,
+                    producer_episode,
+                    lane_work,
+                    64,
+                    &mut cleanup_supervisor,
+                    |receipt, artifact, lane_work| {
+                        assert_eq!(receipt.context_id(), recovered_context.id());
+                        assert_eq!(receipt.block_hash(), subject.block_hash);
+                        assert_eq!(artifact.subject, subject);
+                        lane_work
+                            .retain_merge_sidecars_for_global_view(
+                                artifact.commit_qc.round.view,
+                                None,
+                                Some(artifact.subject),
+                            )
+                            .unwrap_or_else(|error| {
+                                panic!("retain exact recovered-Apply Decision carrier: {error}")
+                            });
+                        let mut successor = recovered_context.clone();
+                        successor.height = successor
+                            .height
+                            .checked_add(1)
+                            .expect("fixture successor height remains in range");
+                        successor.parent_commit_qc = Some(artifact.commit_qc.clone());
+                        successor
+                            .validate()
+                            .expect("immediate recovered-Apply successor context is valid");
+                        Ok::<_, super::super::v2_runner::V2RunnerError>((successor, ()))
+                    },
+                )
                 .unwrap_or_else(|error| {
                     panic!("finalize recovered-Apply lifecycle owner: {error}")
                 });
-            let artifact = {
-                let (receipt, artifact) = finalized.finality();
-                assert_eq!(receipt.context_id(), recovered_context.id());
-                assert_eq!(receipt.block_hash(), subject.block_hash);
-                assert_eq!(artifact.subject, subject);
-                artifact.clone()
-            };
-            lane_work
-                .retain_merge_sidecars_for_global_view(
-                    artifact.commit_qc.round.view,
-                    None,
-                    Some(artifact.subject),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("retain exact recovered-Apply Decision carrier: {error}")
-                });
-            let mut successor = recovered_context.clone();
-            successor.height = successor
-                .height
-                .checked_add(1)
-                .expect("fixture successor height remains in range");
-            successor.parent_commit_qc = Some(artifact.commit_qc.clone());
-            successor
-                .validate()
-                .expect("immediate recovered-Apply successor context is valid");
-            let (post_output, retained_sidecars) = finalized
-                .rollover_outputs(&mut runner, lane_work, &successor, 64)
-                .unwrap_or_else(|error| panic!("roll over exact lifecycle output: {error}"));
             drop(retained_sidecars);
-            let cleanup_ready = post_output
-                .retire_lifecycle_stores()
-                .unwrap_or_else(|error| panic!("retire recovered-Apply lifecycle stores: {error}"));
-            let mut cleanup_supervisor = super::super::v2_worker::V2CleanupSupervisor::default();
-            let outcome = cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor);
             assert!(outcome.cleanup().warnings().is_empty());
             assert!(outcome.wal_retirement_warning().is_none());
             assert!(!ingress_ready.load(Ordering::Acquire));

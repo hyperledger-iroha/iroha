@@ -1145,7 +1145,7 @@
             !runtime
                 .older_lifecycle_predates_exact_serve(started_at, later_serve)
                 .expect("inspect passive dormant ownership at the Serve cut"),
-            "passive dormant debt cannot open an executable Serve predecessor episode"
+            "passive dormant debt cannot open an executable Serve predecessor admission"
         );
 
         for value in [1, 2, 3] {

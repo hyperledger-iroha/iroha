@@ -1076,7 +1076,7 @@ mod tests {
                     "sumeragi-v2-concrete-admission-test",
                 ),
                 protocol_version: wire::PROTOCOL_VERSION,
-                height: 7,
+                height: 1,
                 epoch: 1,
                 epoch_end_height: 100,
                 next_epoch_snapshot: None,
@@ -1108,7 +1108,7 @@ mod tests {
                 verified,
                 context,
                 round,
-                tag: EventTag::new(7, 2, Generation::new(1)),
+                tag: EventTag::new(1, 2, Generation::new(1)),
             }
         }
 
@@ -1322,6 +1322,142 @@ mod tests {
         assert_eq!(coordinator.high_water(), 1);
         assert_eq!(coordinator.admission_waits.len(), 1);
         assert_eq!(registry.registry.len(), 1);
+    }
+
+    #[test]
+    fn exhaustive_live_registry_census_rejects_volatile_drift_and_one_missing_carrier() {
+        let fixture = Fixture::new();
+        let mut coordinator = fixture.coordinator(64);
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        for (marker, source_ordinal) in [(0x31, 91), (0x32, 92)] {
+            let (effect, pending) = fixture.pair(fixture.effect(marker), source_ordinal);
+            assert!(matches!(
+                coordinator.admit_concrete_adapter_effect(
+                    &mut registry,
+                    &fixture.verified,
+                    effect,
+                    pending,
+                ),
+                AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted { .. })
+            ));
+        }
+        assert!(
+            registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+
+        coordinator.ready_index.remove(&1);
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .state = LifecycleState::Waiting(WaitToken::new(
+            WaitSource::Capacity(super::super::CapacityClass::Consensus),
+            0,
+        ));
+        assert!(
+            !registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .state = LifecycleState::Ready;
+        coordinator.ready_index.insert(1);
+
+        let recovery_source = WaitSource::Recovery(LifecycleDigest::new([0x33; 32]));
+        coordinator.ready_index.remove(&1);
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .state = LifecycleState::Waiting(WaitToken::new(recovery_source, 1));
+        assert!(
+            !registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator.observed_generation.insert(recovery_source, 1);
+        assert!(
+            registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .state = LifecycleState::Waiting(WaitToken::new(recovery_source, u64::MAX));
+        coordinator
+            .observed_generation
+            .insert(recovery_source, u64::MAX);
+        assert!(
+            !registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator.observed_generation.remove(&recovery_source);
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .state = LifecycleState::Ready;
+        coordinator.ready_index.insert(1);
+
+        let removed_generation = coordinator
+            .capacity_generation
+            .remove(&super::super::CapacityClass::Producer)
+            .expect("complete capacity generations");
+        assert!(
+            !registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator
+            .capacity_generation
+            .insert(super::super::CapacityClass::Producer, removed_generation);
+
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .episode
+            .frozen_predecessors
+            .insert(1);
+        assert!(
+            !registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+        coordinator
+            .records
+            .get_mut(&1)
+            .expect("first live row")
+            .episode
+            .frozen_predecessors
+            .clear();
+        assert!(
+            registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
+
+        let record = &coordinator.records[&1];
+        let (&slot, _) = record
+            .physical_slots
+            .first_key_value()
+            .expect("admitted concrete work retains one physical slot");
+        let address = ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+            .expect("admitted concrete work retains a valid address");
+        assert!(registry.registry.remove_exact_for_test(address));
+        assert!(
+            !registry
+                .registry
+                .exactly_covers_all_live_work(&fixture.verified, &coordinator)
+        );
     }
 
     #[test]

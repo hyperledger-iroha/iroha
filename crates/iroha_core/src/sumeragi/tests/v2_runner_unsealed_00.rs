@@ -1,59 +1,49 @@
 #[test]
 #[allow(clippy::too_many_lines)]
-fn complete_certified_serve_episode_cannot_veto_pacemaker() {
+fn closed_certified_serve_predecessor_admission_cannot_veto_pacemaker() {
     let calls = Cell::new(0_u8);
-    for older_runtime_episode_claimed in [true, false] {
-        service_certified_serve_barrier_pacemaker_turn(
-            false,
-            older_runtime_episode_claimed,
-            || {
-                calls.set(calls.get().saturating_add(1));
-                Ok::<(), ()>(())
-            },
-        )
-        .expect("live certified Serve barrier services one pacemaker turn");
-    }
+    service_certified_serve_barrier_pacemaker_turn(false, || {
+        calls.set(calls.get().saturating_add(1));
+        Ok::<(), ()>(())
+    })
+    .expect("live certified Serve barrier services one pacemaker turn");
     assert_eq!(
         calls.get(),
-        2,
-        "a Complete predecessor episode must service the pacemaker exactly like a newly claimed episode"
+        1,
+        "a closed predecessor admission cannot veto the live pacemaker"
     );
 
-    service_certified_serve_barrier_pacemaker_turn(false, false, || {
+    service_certified_serve_barrier_pacemaker_turn(false, || {
         calls.set(calls.get().saturating_add(1));
         Err::<(), _>("typed pacemaker failure")
     })
     .expect_err("live runner propagates a typed pacemaker failure");
-    assert_eq!(calls.get(), 3);
+    assert_eq!(calls.get(), 2);
 
-    service_certified_serve_barrier_pacemaker_turn(true, false, || {
+    service_certified_serve_barrier_pacemaker_turn(true, || {
         calls.set(calls.get().saturating_add(1));
         Ok::<(), ()>(())
     })
     .expect("interrupted-tip recovery does not arm a fresh pacemaker");
-    assert_eq!(calls.get(), 3);
+    assert_eq!(calls.get(), 2);
 
     #[cfg(feature = "bls")]
     {
         let mut recovery =
             super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new();
         for _ in 0..16 {
-            let older_runtime_episode_claimed = recovery
+            recovery
                 .service_exact_serve_runtime_prefix()
                 .expect("service the exact selected-Serve runtime prefix");
-            service_certified_serve_barrier_liveness_turn(
-                false,
-                older_runtime_episode_claimed,
-                |action| match action {
-                    CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
-                        recovery.service_timeout_vote_episode()
-                    }
-                    CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-                        recovery.service_timeout_recovery_prefix()
-                    }
-                    CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
-                },
-            )
+            service_certified_serve_barrier_liveness_turn(false, |action| match action {
+                CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
+                    recovery.service_timeout_vote_episode()
+                }
+                CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+                    recovery.service_timeout_recovery_prefix()
+                }
+                CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
+            })
             .expect("the selected-Serve suffix retains typed timeout recovery");
             if recovery.entered_view_one() {
                 break;

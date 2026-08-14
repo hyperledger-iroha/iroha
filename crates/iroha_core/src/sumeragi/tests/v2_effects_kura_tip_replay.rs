@@ -334,6 +334,16 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         PendingKuraApplyRecoveryStage::ApplicationDispatched
     );
 
+    let mut clock_fixture = ProductionTransportFixture::new();
+    clock_fixture.executor.pending_tip_recovery = Some(evidence.clone());
+    assert_eq!(
+        clock_fixture.executor.arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            Instant::now(),
+        ),
+        Err(RuntimeClockError::PendingKuraRecovery),
+        "pending Kura recovery must keep the ordinary pacemaker sealed",
+    );
     let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
     direct_apply_executor.validated_bodies = validations.clone();
     direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
@@ -498,7 +508,6 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
     assert_eq!(validated.durable(), &durable);
 }
 
-
 #[test]
 fn mismatched_kura_completion_fails_closed_before_application_ack() {
     let fixture = Fixture::new();
@@ -560,8 +569,7 @@ fn service_runtime_body_store_and_status_failures_close_executor() {
         }),
     };
     assert!(matches!(
-        service_executor
-            .consume_effects(vec![AdapterEffect::Broadcast(message)], &mut services),
+        service_executor.consume_effects(vec![AdapterEffect::Broadcast(message)], &mut services),
         Err(EffectExecutorError::Service(_))
     ));
     assert!(service_executor.status().fail_closed);
@@ -753,8 +761,8 @@ fn leader_wire_runtime_terminal_fixture(
         scheduler_ordinal,
         source_class: super::super::FairV2IngressLeaderWireSourceClass::Control,
     };
-    let owner = [u8::try_from(scheduler_ordinal)
-        .expect("leader-wire fixture ordinal fits one byte"); 32];
+    let owner =
+        [u8::try_from(scheduler_ordinal).expect("leader-wire fixture ordinal fits one byte"); 32];
     let capacity =
         super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
             fixture.context.roster.len(),
@@ -1186,8 +1194,7 @@ fn ready_body_backpressure_retains_exact_ingress_until_capacity_retry() {
     );
     assert!(!executor.status().fail_closed);
 
-    executor.config.max_ready_body_bytes =
-        u64::try_from(fixture.body.len()).expect("body length");
+    executor.config.max_ready_body_bytes = u64::try_from(fixture.body.len()).expect("body length");
     services.retry_certified_fetch_once = true;
     assert_eq!(
         executor.retry_retained_certified_body_response(&mut services),
@@ -2039,14 +2046,13 @@ fn apply_retransmissions_reuse_one_work_slot() {
     assert!(!executor.status().fail_closed);
 
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-    conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting terminal parent state"),
-            Hash::new(b"conflicting terminal post state"),
-            Hash::new(b"conflicting terminal ordinary writes"),
-            1,
-            Hash::new(b"conflicting terminal executed block"),
-        );
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting terminal parent state"),
+        Hash::new(b"conflicting terminal post state"),
+        Hash::new(b"conflicting terminal ordinary writes"),
+        1,
+        Hash::new(b"conflicting terminal executed block"),
+    );
     executor.runtime.effect_owners.clear();
     assert!(matches!(
         executor.consume_effects(
@@ -2153,14 +2159,13 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     assert!(!executor.status().fail_closed);
 
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
-    conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting terminal parent state"),
-            Hash::new(b"conflicting terminal post state"),
-            Hash::new(b"conflicting terminal ordinary writes"),
-            1,
-            Hash::new(b"conflicting terminal executed block"),
-        );
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting terminal parent state"),
+        Hash::new(b"conflicting terminal post state"),
+        Hash::new(b"conflicting terminal ordinary writes"),
+        1,
+        Hash::new(b"conflicting terminal executed block"),
+    );
     executor.runtime.effect_owners.clear();
     assert!(matches!(
         executor.consume_effects(
@@ -2459,14 +2464,13 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(highest.clone());
     let mut conflicting = highest;
-    conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"conflicting EnterView parent state"),
-            Hash::new(b"conflicting EnterView post state"),
-            Hash::new(b"conflicting EnterView ordinary writes"),
-            1,
-            Hash::new(b"conflicting EnterView executed block"),
-        );
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"conflicting EnterView parent state"),
+        Hash::new(b"conflicting EnterView post state"),
+        Hash::new(b"conflicting EnterView ordinary writes"),
+        1,
+        Hash::new(b"conflicting EnterView executed block"),
+    );
 
     assert!(matches!(
         executor.consume_effects(
@@ -2701,8 +2705,7 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
     );
     let block_signature = SignatureOf::try_from_hash(keys[0].private_key(), header.hash())
         .expect("canonical body signature");
-    let block =
-        SignedBlock::presigned(BlockSignature::new(0, block_signature), header, Vec::new());
+    let block = SignedBlock::presigned(BlockSignature::new(0, block_signature), header, Vec::new());
     let body = block.encode_wire().expect("canonical SignedBlockWire");
     let subject = wire::BlockSubject {
         parent_block_hash: None,
@@ -2832,7 +2835,10 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
     );
 
     executor
-        .arm_live_clocks(started)
+        .arm_live_clocks(
+            ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
         .expect("arm clocks after startup effects");
     assert!(matches!(
         executor

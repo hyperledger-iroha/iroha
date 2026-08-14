@@ -552,8 +552,7 @@ impl LifecycleLedgerV1 {
 
         if !consumed_producers.is_empty() || !serve_reconciliation.is_drained() {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "finalized-height Serve retirement census was not consumed exactly once"
-                    .to_owned(),
+                "finalized-height Serve retirement census was not consumed exactly once".to_owned(),
             ));
         }
         let retired = Self::new(
@@ -1727,6 +1726,20 @@ impl LifecycleLedgerV1 {
             ));
         }
         Ok((self.clone(), apply_ordinal, false))
+    }
+
+    /// Rejoin an installed recovered Apply carrier to its unchanged four-row ledger lineage.
+    pub(in crate::sumeragi) fn exactly_matches_recovered_decision_apply_carrier(
+        &self,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        lineage: &RecoveredDecisionApplyCandidateLineageV1,
+        installed_apply_ordinal: u128,
+    ) -> bool {
+        let projection = RecoveredDecisionApplyCarrierLedgerProjectionV1 { fetch, lineage };
+        self.stage_recovered_decision_apply_projection(&projection)
+            .is_ok_and(|(staged, apply_ordinal, changed)| {
+                !changed && staged == *self && apply_ordinal == installed_apply_ordinal
+            })
     }
 
     /// Authenticate an already terminal recovered Decision body chain.

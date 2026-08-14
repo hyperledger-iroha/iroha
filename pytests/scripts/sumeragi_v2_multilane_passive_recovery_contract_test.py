@@ -212,40 +212,73 @@ def test_passive_recovery_contract_rejects_prior_deadline_anchoring(
 def test_passive_recovery_contract_rejects_unsigned_retry_bounds(
     tmp_path: Path,
 ) -> None:
-    support = load_support()
-    module = support.load_checker()
-    models = copy_fixture(tmp_path, support, module)
-    support.swap_ordered_once_after(
-        tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "let lane_work_limits = lane_work_limits(",
-        "retransmit_interval",
-        "round_timeout",
+    cases = (
+        (
+            "ordinary",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "run_non_pending_lifecycle_loop",
+        ),
+        (
+            "pending-kura",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+            "run_pending_kura_lifecycle_height",
+        ),
     )
-    errors = validate_fixture(tmp_path, module, models)
-    assert any(
-        "run_inner" in error
-        and ("missing or reorders" in error or "source-bound token" in error)
-        for error in errors
-    ), errors
+    for fixture_name, relative, symbol in cases:
+        fixture = tmp_path / fixture_name
+        support = load_support()
+        module = support.load_checker()
+        models = copy_fixture(fixture, support, module)
+        support.swap_ordered_once_after(
+            fixture / relative,
+            "let lane_work_limits = lane_work_limits(",
+            "retransmit_interval",
+            "round_timeout",
+        )
+        errors = validate_fixture(fixture, module, models)
+        assert any(
+            symbol in error
+            and ("missing or reorders" in error or "source-bound token" in error)
+            for error in errors
+        ), errors
 
 
 def test_passive_recovery_contract_rejects_missing_quiet_tick_branch(
     tmp_path: Path,
 ) -> None:
-    support = load_support()
-    module = support.load_checker()
-    models = copy_fixture(tmp_path, support, module)
-    support.replace_once_after(
-        tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "if !terminal_decision {",
-        "service_historical_recovery_tick(&mut lane_work)?",
-        "skip_historical_recovery_tick(&mut lane_work)?",
+    cases = (
+        (
+            "ordinary",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "fn run_lifecycle_active_height(",
+            "run_lifecycle_active_height",
+            "service_historical_recovery_tick(&mut lane_work)?",
+            "skip_historical_recovery_tick(&mut lane_work)?",
+        ),
+        (
+            "pending-kura",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+            "fn run_pending_active_height(",
+            "run_pending_active_height",
+            "service_historical_recovery_tick(lane_work)?",
+            "skip_historical_recovery_tick(lane_work)?",
+        ),
     )
-    errors = validate_fixture(tmp_path, module, models)
-    assert any(
-        "both ordinary and decided quiet retransmission branches" in error
-        for error in errors
-    ), errors
+    for fixture_name, relative, anchor, symbol, old, new in cases:
+        fixture = tmp_path / fixture_name
+        support = load_support()
+        module = support.load_checker()
+        models = copy_fixture(fixture, support, module)
+        support.replace_once_after(fixture / relative, anchor, old, new)
+        errors = validate_fixture(fixture, module, models)
+        assert any(
+            symbol in error
+            and (
+                "source-bound token" in error
+                or "must service exactly one retained historical owner" in error
+            )
+            for error in errors
+        ), errors
 
 
 def test_passive_recovery_contract_rejects_state_control_without_explicit_repair(

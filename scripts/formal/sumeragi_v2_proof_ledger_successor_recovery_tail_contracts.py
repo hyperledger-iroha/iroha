@@ -1,763 +1,5 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
-def _successor_activation_rank_source_fidelity_errors(
-    formal_dir: Path,
-) -> list[str]:
-    """Pin the exact finite-rank corridor used by successor liveness."""
-
-    proof_path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
-    if not proof_path.is_file():
-        return []
-
-    source = proof_path.read_text(encoding="utf-8")
-    errors: list[str] = []
-    operator_contracts = {
-        "SuccessorActivationRankCarrier": "0..21",
-        "SuccessorActivationPipelineDistance": " ".join(
-            r'''
-            LET successorContext ==
-                  CanonicalIndexedContext(parentContext.height + 1)
-                marker ==
-                  SuccessorActivationMarker(parentContext, node, successorContext)
-            IN CASE successorActivationStatus[parentContext][node] = "Queued" -> 10
-               [] /\ successorActivationStatus[parentContext][node] = "Running"
-                  /\ ~SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                      -> 9
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node] = {}
-                      -> 8
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationAdapterPrerequisites
-                      -> 7
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationRuntimePrerequisites
-                      -> 6
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationServicePrerequisites
-                      -> 5
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationStartupPrerequisites
-                      -> 4
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationClockPrerequisites
-                  /\ marker \notin preparedSuccessorActivationMarkers
-                      -> 3
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationClockPrerequisites
-                  /\ marker \in preparedSuccessorActivationMarkers
-                      -> 2
-               [] /\ SuccessorActivationCredentialReady(
-                        parentContext, node, successorContext)
-                  /\ successorActivationPrerequisites[parentContext][node]
-                       = SuccessorActivationRequiredPrerequisites
-                      -> 1
-               [] OTHER -> 0
-            '''.split()
-        ),
-        "SuccessorActivationRank": (
-            "IF SuccessorPublicationOrSuperseded(parentContext, node) THEN 0 "
-            "ELSE IF successorPredecessorStatusOwnership[parentContext][node] "
-            '= "Published" THEN 11 + '
-            "SuccessorActivationPipelineDistance(parentContext, node) "
-            "ELSE SuccessorActivationPipelineDistance(parentContext, node)"
-        ),
-        "SuccessorActivationPending": (
-            "IndexedSuccessorActivationPending(parentContext, node)"
-        ),
-        "SuccessorActivationHasDurableParentWitness": (
-            "/\\ \\E application \\in Chain!DecisionEvidenceSet: "
-            "ExactDurableParentApplication(parentContext, node, application)"
-        ),
-        "SuccessorActivationAtRank": (
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationRank(parentContext, node) = rank"
-        ),
-        "SuccessorActivationFailureAbsent": (
-            "SuccessorActivationOwner(parentContext, node) "
-            "\\notin successorActivationFailures"
-        ),
-        "SuccessorActivationPendingStructureProperty": (
-            "[](\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationPending(parentContext, node) "
-            "=> /\\ SuccessorActivationHasDurableParentWitness( "
-            "parentContext, node) "
-            "/\\ SuccessorActivationPipelineDistance(parentContext, node) "
-            "\\in 1..10 "
-            "/\\ SuccessorActivationRank(parentContext, node) "
-            "\\in SuccessorActivationRankCarrier "
-            "/\\ ENABLED <<IndexedSuccessorActivationProgressStep( "
-            "parentContext, node)>>_(IndexedChainVars))"
-        ),
-        "SuccessorActivationStepDecreasesRankProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[][ /\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "< SuccessorActivationRank(parentContext, node) "
-            "]_IndexedChainVars"
-        ),
-        "SuccessorActivationPendingIsNotOrphanedProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[][ /\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ SuccessorActivationPending(parentContext, node)' "
-            "]_IndexedChainVars"
-        ),
-        "SuccessorActivationOutcomeIsStableProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[][ /\\ SuccessorPublicationOrSuperseded(parentContext, node) "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "]_IndexedChainVars"
-        ),
-        "SuccessorActivationRankProgressProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "SuccessorActivationAtRank(parentContext, node, rank) "
-            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
-            "\\/ \\E lower \\in SetLessThan( rank, OpToRel(<, Nat), "
-            "SuccessorActivationRankCarrier): "
-            "SuccessorActivationAtRank(parentContext, node, lower))"
-        ),
-        "SuccessorActivationStarvationFreedomProperty": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node)"
-        ),
-        "SuccessorActivationTemporalKernel": (
-            "/\\ []IndexedCompositionInvariant "
-            "/\\ []SuccessorActivationProtocolInvariant "
-            "/\\ [][IndexedChainNext]_IndexedChainVars "
-            "/\\ WF_IndexedChainVars( "
-            "IndexedSuccessorActivationProgressStep(parentContext, node))"
-        ),
-        "SuccessorActivationFailureFreeSuffix": (
-            "[]SuccessorActivationFailureAbsent(parentContext, node)"
-        ),
-        "FailedSuccessorStartupRestartStep": (
-            "\\E successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "RehydrateFailedSuccessorStartup( "
-            "parentContext, node, successorContext, application)"
-        ),
-    }
-    for symbol, exact_body in operator_contracts.items():
-        extracted = _top_level_operator_body(
-            source, symbol, preserve_string_contents=True
-        )
-        if extracted is None:
-            errors.append(f"{proof_path}: missing successor-rank operator {symbol}")
-            continue
-        body, line = extracted
-        normalized = " ".join(body.split())
-        if normalized != exact_body:
-            errors.append(
-                f"{proof_path}:{line}: {symbol} must equal only "
-                f"{exact_body!r}; found {normalized!r}"
-            )
-
-    theorem_contracts = {
-        "SuccessorActivationPendingRankTierClassification": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationShape "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "=> \\/ /\\ successorPredecessorStatusOwnership"
-            "[parentContext][node] = \"Published\" "
-            "/\\ SuccessorActivationRank(parentContext, node) \\in 12..21 "
-            "\\/ /\\ successorPredecessorStatusOwnership"
-            "[parentContext][node] = \"Absent\" "
-            "/\\ SuccessorActivationRank(parentContext, node) \\in 1..10",
-            (
-                "SuccessorActivationShape",
-                "SuccessorActivationProtocolInvariant",
-                "SuccessorActivationRank",
-                "Isa",
-            ),
-        ),
-        "ExactDurableParentApplicationHasAdmissibleSuccessorContext": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in ValidatorIds, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ Chain!ChainEpochInvariant "
-            "/\\ ExactDurableParentApplication(parentContext, node, application) "
-            "=> CanonicalIndexedContext(parentContext.height + 1) "
-            "\\in AdmissibleContextRecords",
-            (
-                "Chain!ChainEpochTypeInvariant",
-                "Chain!NodesDoNotOutrunCertificates",
-                "Chain!CertifiedPrefixBacked",
-                "FrozenContextAdmissible",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationProgressPreservesProtocolInvariant": (
-            "\\A selectedParent \\in AdmissibleContextRecords, "
-            "selectedNode \\in ValidatorIds: "
-            "Chain!ChainEpochInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ IndexedSuccessorActivationProgressStep( "
-            "selectedParent, selectedNode) "
-            "=> SuccessorActivationProtocolInvariant'",
-            (
-                "ExactDurableParentApplicationHasAdmissibleSuccessorContext",
-                "ExpandENABLED",
-                "Isa",
-            ),
-        ),
-        "IndexedActionPreservesSuccessorActivationProtocolInvariant": (
-            "IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ IndexedChainNext "
-            "=> SuccessorActivationProtocolInvariant'",
-            (
-                "IndexedProductActionPreservesSuccessorActivationProtocolInvariant",
-                "SuccessorActivationProgressPreservesProtocolInvariant",
-                "DEF IndexedCompositionInvariant",
-            ),
-        ),
-        "CleanCompleteTipRestartDescendsPublishedTier": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
-            "parentContext, node, successorContext, application) "
-            "=> /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "< SuccessorActivationRank(parentContext, node)",
-            (
-                "CleanCompleteTipRestartCrossesPublishedToAbsentTier",
-                "Isa",
-            ),
-        ),
-        "FailureFreeBracketExcludesSuccessorResetActions": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "=> /\\ ~SuccessorStartupFailureStep(parentContext, node) "
-            "/\\ ~FailedSuccessorStartupRestartStep(parentContext, node)",
-            (
-                "SuccessorStartupFailureStep",
-                "FailedSuccessorStartupRestartStep",
-                "LatchAppliedSuccessorStartupFailure",
-                "LatchRecoveredSuccessorStartupFailure",
-                "RehydrateFailedSuccessorStartup",
-                "Isa",
-            ),
-        ),
-        "CleanCompleteTipRestartCrossesPublishedToAbsentTier": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ RehydrateCleanCompleteTipSuccessorStartup( "
-            "parentContext, node, successorContext, application) "
-            "=> /\\ SuccessorActivationRank(parentContext, node) \\in 12..21 "
-            "/\\ successorPredecessorStatusOwnership'[parentContext][node] "
-            "= \"Absent\" "
-            "/\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' = 10 "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)'",
-            (
-                "SuccessorActivationRank",
-                "SuccessorActivationPipelineDistance",
-                "RehydrateCleanCompleteTipSuccessorStartup",
-                "ExactDurableParentApplication",
-                "Isa",
-            ),
-        ),
-        "RecoveredAuthenticationDescendsAbsentTier": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "successorContext \\in AdmissibleContextRecords, "
-            "application \\in Chain!DecisionEvidenceSet: "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ AuthenticateRecoveredSuccessorActivation( "
-            "parentContext, node, successorContext, application) "
-            "=> /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ successorPredecessorStatusOwnership'[parentContext][node] "
-            "= \"Absent\" "
-            "/\\ SuccessorActivationRank(parentContext, node) = 10 "
-            "/\\ SuccessorActivationRank(parentContext, node)' = 8 "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)'",
-            (
-                "AuthenticateRecoveredSuccessorActivation",
-                "SuccessorActivationCredentialReady",
-                "ExactSuccessorActivationToken",
-                "ExactCompleteTipRecoveryAuthority",
-                "SuccessorActivationRank",
-                "SuccessorActivationPipelineDistance",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "< SuccessorActivationRank(parentContext, node)",
-            (
-                "FailureFreeBracketExcludesSuccessorResetActions",
-                "SuccessorActivationPendingRankTierClassification",
-                "RecoveredAuthenticationDescendsAbsentTier",
-                "CleanCompleteTipRestartDescendsPublishedTier",
-                "LatchAppliedSuccessorStartupFailure",
-                "LatchRecoveredSuccessorStartupFailure",
-                "RehydrateFailedSuccessorStartup",
-                "Isa",
-            ),
-        ),
-        "IndexedProductActionDoesNotRaisePendingSuccessorRank": (
-            "\\A initialContext \\in JoinedContexts, "
-            "parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ IndexedProductActionAt(initialContext) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "<= SuccessorActivationRank(parentContext, node)",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "IndexedProductActionAt",
-                "IndexedReceiptClassification",
-                "QueueSuccessorActivation",
-                "Isa",
-            ),
-        ),
-        "OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "selectedParent \\in AdmissibleContextRecords, "
-            "selectedNode \\in ValidatorIds: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationOwner(selectedParent, selectedNode) "
-            "# SuccessorActivationOwner(parentContext, node) "
-            "/\\ IndexedSuccessorActivationProgressStep( "
-            "selectedParent, selectedNode) "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "= SuccessorActivationRank(parentContext, node)",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "SuccessorActivationOwner",
-                "IndexedSuccessorActivationProgressStep",
-                "Isa",
-            ),
-        ),
-        "IndexedStepRetainsExactDurableParentWitnessOrExits": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationHasDurableParentWitness( "
-            "parentContext, node)'",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "IndexedStepPreservesSuccessorActivationProtocolInvariant",
-                "SuccessorActivationHasDurableParentWitness",
-                "Isa",
-            ),
-        ),
-        "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
-            "/\\ SuccessorActivationRank(parentContext, node)' "
-            "<= SuccessorActivationRank(parentContext, node)",
-            (
-                "IndexedStepDoesNotOrphanSuccessorActivation",
-                "IndexedProductActionDoesNotRaisePendingSuccessorRank",
-                "OtherOwnerProgressFramesPendingSuccessorRankOrSupersedes",
-                "FailureFreeBracketExcludesSuccessorResetActions",
-                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
-                "IndexedChainNext",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationFailureFreeRankPersistsOrExits": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "/\\ IndexedCompositionInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ [IndexedChainNext]_IndexedChainVars "
-            "=> \\/ SuccessorActivationAtRank(parentContext, node, rank)' "
-            "\\/ SuccessorActivationRankExit(parentContext, node, rank)'",
-            (
-                "IndexedFailureFreeStepDoesNotRaiseSuccessorActivationRank",
-                "IndexedStepRetainsExactDurableParentWitnessOrExits",
-                "IndexedStepPreservesSuccessorActivationProtocolInvariant",
-                "Isa",
-            ),
-        ),
-        "SuccessorActivationFailureFreeProgressExitsCurrentRank": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "/\\ Chain!ChainEpochInvariant "
-            "/\\ SuccessorActivationProtocolInvariant "
-            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
-            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
-            "/\\ <<IndexedSuccessorActivationProgressStep( "
-            "parentContext, node)>>_(IndexedChainVars) "
-            "=> SuccessorActivationRankExit(parentContext, node, rank)'",
-            (
-                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
-                "SuccessorActivationProgressPreservesProtocolInvariant",
-                "Isa",
-            ),
-        ),
-        "FailureFreeSuccessorActivationRankLeadsToExit": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive, "
-            "rank \\in SuccessorActivationRankCarrier: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationAtRank(parentContext, node, rank) "
-            "~> SuccessorActivationRankExit(parentContext, node, rank))",
-            (
-                "SuccessorActivationFailureFreeRankPersistsOrExits",
-                "SuccessorActivationAtRankEnablesFairProgress",
-                "SuccessorActivationFailureFreeProgressExitsCurrentRank",
-                "Chain!ChainEpochInvariant",
-                "DEF IndexedCompositionInvariant",
-                "WF_IndexedChainVars",
-                "PTL",
-            ),
-        ),
-        "FailureFreeSuccessorActivationRankConverges": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> \\A rank \\in SuccessorActivationRankCarrier: "
-            "SuccessorActivationAtRank(parentContext, node, rank) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node)",
-            (
-                "SuccessorActivationRankOrderingIsWellFounded",
-                "FailureFreeSuccessorActivationRankLeadsToExit",
-                "WellFoundedLeadsTo",
-            ),
-        ),
-        "FailureFreeSuccessorActivationConverges": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
-            (
-                "FailureFreeSuccessorActivationRankConverges",
-                "SuccessorActivationRankExistentialLift",
-                "SuccessorActivationPendingHasRankWitness",
-                "PTL",
-            ),
-        ),
-        "SuccessorActivationTemporalKernelIsSuffixClosed": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "SuccessorActivationTemporalKernel(parentContext, node) "
-            "=> []SuccessorActivationTemporalKernel(parentContext, node)",
-            ("PTL", "SuccessorActivationTemporalKernel"),
-        ),
-        "FailureFreeSuccessorActivationConvergenceAtEverySuffix": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "[]( /\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node)))",
-            ("FailureFreeSuccessorActivationConverges", "PTL"),
-        ),
-        "SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
-            "\\/ /\\ SuccessorActivationPending(parentContext, node) "
-            "/\\ SuccessorActivationFailureFreeSuffix( "
-            "parentContext, node)))",
-            (
-                "IndexedStepRetainsExactDurableParentWitnessOrExits",
-                "SuccessorActivationTemporalKernel",
-                "SuccessorActivationFailureFreeSuffix",
-                "PTL",
-            ),
-        ),
-        "EventualFailureFreeSuffixLiftsSuccessorConvergence": (
-            "\\A parentContext \\in AdmissibleContextRecords, "
-            "node \\in Responsive: "
-            "/\\ SuccessorActivationTemporalKernel(parentContext, node) "
-            "/\\ <>SuccessorActivationFailureFreeSuffix(parentContext, node) "
-            "=> (SuccessorActivationPending(parentContext, node) "
-            "~> SuccessorPublicationOrSuperseded(parentContext, node))",
-            (
-                "SuccessorActivationTemporalKernelIsSuffixClosed",
-                "FailureFreeSuccessorActivationConvergenceAtEverySuffix",
-                "SuccessorActivationPendingReachesFailureFreeSuffixOrOutcome",
-                "PTL",
-            ),
-        ),
-        "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom": (
-            "IndexedChainSpec => "
-            "SuccessorActivationStarvationFreedomProperty",
-            (
-                "IndexedChainSpecEstablishesSuccessorActivationTemporalKernel",
-                "EventualFailureFreeSuccessorStartupSuffix",
-                "EventualFailureFreeSuffixLiftsSuccessorConvergence",
-            ),
-        ),
-        "IndexedChainSpecEstablishesSuccessorActivationRankProgress": (
-            "IndexedChainSpec => SuccessorActivationRankProgressProperty",
-            (
-                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
-                "SuccessorActivationRankProgressProperty",
-                "PTL",
-            ),
-        ),
-    }
-    exact_proof_token_counts = {
-        "IndexedActionPreservesSuccessorActivationProtocolInvariant": {
-            "DEF IndexedCompositionInvariant": 2,
-        },
-        "FailureFreeSuccessorActivationRankLeadsToExit": {
-            "Chain!ChainEpochInvariant": 1,
-            "DEF IndexedCompositionInvariant": 1,
-        },
-    }
-    for symbol, (exact_statement, required_proof_tokens) in (
-        theorem_contracts.items()
-    ):
-        theorem = _top_level_theorem_body(
-            source, symbol, preserve_string_contents=True
-        )
-        if theorem is None:
-            errors.append(f"{proof_path}: missing successor-rank theorem {symbol}")
-            continue
-        theorem_body, line = theorem
-        observed_statement = _tla_statement_without_proof(theorem_body)
-        if observed_statement != exact_statement:
-            errors.append(
-                f"{proof_path}:{line}: {symbol} must state only "
-                f"{exact_statement!r}; found {observed_statement!r}"
-            )
-        theorem_parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
-            theorem_body,
-            maxsplit=1,
-        )
-        if len(theorem_parts) != 2:
-            errors.append(
-                f"{proof_path}:{line}: {symbol} must retain an explicit "
-                "non-vacuous proof body"
-            )
-            continue
-        observed_proof = theorem_parts[1]
-        for required_token in required_proof_tokens:
-            if not _tla_dependency_present(observed_proof, required_token):
-                errors.append(
-                    f"{proof_path}:{line}: {symbol} proof must invoke "
-                    f"{required_token}"
-                )
-        for exact_token, exact_count in exact_proof_token_counts.get(
-            symbol, {}
-        ).items():
-            observed_count = len(
-                _tla_dependency_positions(observed_proof, exact_token)
-            )
-            if observed_count != exact_count:
-                errors.append(
-                    f"{proof_path}:{line}: {symbol} proof must contain "
-                    f"{exact_token!r} exactly {exact_count} time(s); found "
-                    f"{observed_count}"
-                )
-        if re.search(
-            r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
-            r"\bPROVE\s+TRUE\b)",
-            observed_proof,
-        ):
-            errors.append(
-                f"{proof_path}:{line}: {symbol} proof may not use a "
-                "vacuous assertion"
-            )
-
-    chain_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
-    if chain_path.is_file():
-        chain_source = chain_path.read_text(encoding="utf-8")
-        pending = _top_level_operator_body(
-            chain_source,
-            "IndexedSuccessorActivationPending",
-            preserve_string_contents=True,
-        )
-        exact_pending = (
-            "/\\ parentContext \\in AdmissibleContextRecords "
-            "/\\ node \\in ValidatorIds "
-            "/\\ parentContext.height < MaxHeight "
-            "/\\ successorActivationStatus[parentContext][node] "
-            '\\in {"Queued", "Running"} '
-            "/\\ ~SuccessorPublicationOrSuperseded(parentContext, node)"
-        )
-        if pending is None:
-            errors.append(
-                f"{chain_path}: missing IndexedSuccessorActivationPending"
-            )
-        else:
-            body, line = pending
-            normalized = " ".join(body.split())
-            if normalized != exact_pending:
-                errors.append(
-                    f"{chain_path}:{line}: IndexedSuccessorActivationPending "
-                    f"must equal only {exact_pending!r}; found {normalized!r}"
-                )
-
-    theorem_symbol = "SuccessorActivationStarvationFreedomObligation"
-    theorem = _top_level_theorem_body(
-        source, theorem_symbol, preserve_string_contents=True
-    )
-    exact_statement = (
-        "IndexedChainSpec "
-        "=> /\\ SuccessorActivationPendingStructureProperty "
-        "/\\ SuccessorActivationStepDecreasesRankProperty "
-        "/\\ SuccessorActivationPendingIsNotOrphanedProperty "
-        "/\\ SuccessorActivationOutcomeIsStableProperty "
-        "/\\ SuccessorActivationRankProgressProperty "
-        "/\\ SuccessorActivationStarvationFreedomProperty"
-    )
-    if theorem is None:
-        errors.append(f"{proof_path}: missing {theorem_symbol}")
-    else:
-        body, line = theorem
-        theorem_parts = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )
-        statement = theorem_parts[0]
-        normalized = " ".join(statement.split())
-        if normalized != exact_statement:
-            errors.append(
-                f"{proof_path}:{line}: {theorem_symbol} must state only "
-                f"{exact_statement!r}; found {normalized!r}"
-            )
-        if len(theorem_parts) != 2:
-            errors.append(
-                f"{proof_path}:{line}: {theorem_symbol} must retain the "
-                "explicit candidate TLAPS proof while strict verification "
-                "remains pending"
-            )
-        else:
-            aggregate_proof = theorem_parts[1]
-            required_aggregate_dependencies = (
-                "IndexedChainSpecEstablishesSuccessorActivationPendingStructure",
-                "IndexedChainSpecEstablishesSuccessorActivationStepDecrease",
-                "IndexedChainSpecEstablishesSuccessorActivationNonOrphaning",
-                "IndexedChainSpecEstablishesSuccessorActivationOutcomeStability",
-                "IndexedChainSpecEstablishesSuccessorActivationRankProgress",
-                "IndexedChainSpecEstablishesSuccessorActivationStarvationFreedom",
-            )
-            for dependency in required_aggregate_dependencies:
-                if len(
-                    _tla_dependency_positions(aggregate_proof, dependency)
-                ) != 1:
-                    errors.append(
-                        f"{proof_path}:{line}: {theorem_symbol} proof must "
-                        f"invoke {dependency} exactly once"
-                    )
-            if re.search(
-                r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
-                r"\bPROVE\s+TRUE\b)",
-                aggregate_proof,
-            ):
-                errors.append(
-                    f"{proof_path}:{line}: {theorem_symbol} proof may not "
-                    "use a vacuous assertion"
-                )
-
-    equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
-    equivalence = _top_level_theorem_body(
-        source, equivalence_symbol, preserve_string_contents=True
-    )
-    exact_equivalence = (
-        "SuccessorActivationStarvationFreedomProperty "
-        "<=> IndexedSuccessorActivationProgress"
-    )
-    if equivalence is None:
-        errors.append(f"{proof_path}: missing {equivalence_symbol}")
-    else:
-        body, line = equivalence
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
-        )[0]
-        normalized = " ".join(statement.split())
-        if normalized != exact_equivalence:
-            errors.append(
-                f"{proof_path}:{line}: {equivalence_symbol} must state only "
-                f"{exact_equivalence!r}; found {normalized!r}"
-            )
-    return errors
 
 
 def _async_historical_recovery_source_fidelity_errors(
@@ -2486,6 +1728,10 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         ),
         (
+            "launch_tests",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        ),
+        (
             "ledger",
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         ),
@@ -2494,11 +1740,17 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
         ),
         (
+            "pending_lifecycle",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        ),
+        (
             "pending_kura",
             "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         ),
         ("effects", "crates/iroha_core/src/sumeragi/v2_effects.rs"),
+        ("apply_tests", "crates/iroha_core/src/sumeragi/v2_apply_tests.rs"),
         ("worker", "crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        ("lane_work", "crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
         ("adapter", "crates/iroha_core/src/sumeragi/v2.rs"),
         (
             "scheduler",
@@ -2520,6 +1772,26 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
         (
             "ordinary_consumer",
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        ),
+        (
+            "height_driver",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+        ),
+        (
+            "lifecycle_run_inner",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        ),
+        (
+            "pending_runner",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        ),
+        (
+            "runner_authority",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs",
+        ),
+        (
+            "preactivation_ingress",
+            "crates/iroha_core/src/sumeragi/v2_runner/preactivation_ingress.rs",
         ),
         (
             "startup_test",
@@ -2548,9 +1820,39 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             'mod preactivation;',
         ),
         (
+            "launch",
+            "v2_lifecycle_pending_kura.rs",
+            'mod pending_kura;',
+        ),
+        (
             "runner",
             "v2_runner/ordinary_ingress_consumer.rs",
             'pub(in crate::sumeragi) mod ordinary_ingress_consumer;',
+        ),
+        (
+            "runner",
+            "v2_runner/lifecycle_height_driver.rs",
+            'mod lifecycle_height_driver;',
+        ),
+        (
+            "runner",
+            "v2_runner/lifecycle_run_inner.rs",
+            'pub(in crate::sumeragi) mod lifecycle_run_inner;',
+        ),
+        (
+            "runner",
+            "v2_runner/lifecycle_pending_kura.rs",
+            'mod lifecycle_pending_kura;',
+        ),
+        (
+            "runner",
+            "v2_runner/lifecycle_runner_authority.rs",
+            'mod lifecycle_runner_authority;',
+        ),
+        (
+            "runner",
+            "v2_runner/preactivation_ingress.rs",
+            'mod preactivation_ingress;',
         ),
         (
             "coordinator",
@@ -2610,6 +1912,26 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 return
             cursor = position + len(needle)
 
+    def reject_tokens(
+        source_name: str,
+        rust_item: RustItem | None,
+        label: str,
+        forbidden: tuple[str, ...],
+    ) -> None:
+        if rust_item is None:
+            return
+        body = rust_code_tokens(rust_item.source)
+        observed = tuple(
+            token
+            for token in forbidden
+            if _token_sequence_count(body, rust_code_tokens(token))
+        )
+        if observed:
+            errors.append(
+                f"{paths[source_name]}:{rust_item.line}: {label} retains "
+                f"forbidden ordinary-height authority {observed!r}"
+            )
+
     launched_fields = sources["launch"]
     launched_start = launched_fields.find(
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1"
@@ -2644,6 +1966,338 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
             )
             break
         launched_cursor = position + len(token)
+
+    aperture_open_candidates = [
+        rust_item
+        for rust_item in rust_items(
+            sources["preactivation_ingress"], "open_canonical_recovery_ingress"
+        )
+        if not rust_item.brace_context
+    ]
+    if len(aperture_open_candidates) != 1:
+        errors.append(
+            f"{paths['preactivation_ingress']}: canonical-recovery aperture "
+            f"must retain one free open constructor; found "
+            f"{len(aperture_open_candidates)}"
+        )
+        aperture_open = None
+    else:
+        aperture_open = aperture_open_candidates[0]
+    require_order(
+        "preactivation_ingress",
+        aperture_open,
+        "preactivation canonical-recovery ingress open",
+        (
+            "Arc::ptr_eq(block_ingress, launched_ingress)",
+            "ingress_ready.load(Ordering::Acquire)",
+            "block_ingress.state.lock().open",
+            "block_ingress.open()",
+            "ingress_ready.store(true, Ordering::Release)",
+            "ProductionLifecycleCanonicalRecoveryIngressV1",
+        ),
+    )
+    aperture_drop_items = [
+        rust_item
+        for rust_item in rust_items(sources["preactivation_ingress"], "drop")
+        if len(rust_item.brace_context) == 1
+        and rust_item.brace_context[0][:3] == ("impl", "Drop", "for")
+        and "ProductionLifecycleCanonicalRecoveryIngressV1"
+        in rust_item.brace_context[0]
+    ]
+    if len(aperture_drop_items) != 1:
+        errors.append(
+            f"{paths['preactivation_ingress']}: canonical-recovery aperture must "
+            f"retain one RAII Drop; found {len(aperture_drop_items)}"
+        )
+    else:
+        require_tokens(
+            "preactivation_ingress",
+            aperture_drop_items[0],
+            "preactivation canonical-recovery ingress RAII close",
+            ("self.close()",),
+        )
+    aperture_close = item("preactivation_ingress", "close")
+    require_order(
+        "preactivation_ingress",
+        aperture_close,
+        "preactivation canonical-recovery ingress close",
+        (
+            "self.ingress_ready.store(false, Ordering::Release)",
+            "self.block_ingress.close()",
+            "self.open = false",
+        ),
+    )
+    aperture_transaction = item(
+        "preactivation", "with_canonical_body_recovery_ingress_transaction"
+    )
+    require_order(
+        "preactivation",
+        aperture_transaction,
+        "launched canonical-recovery aperture transaction",
+        (
+            "self.with_runner_setup_transaction",
+            "activation.open_canonical_recovery_ingress(&launched_ingress)",
+            "operation(&aperture, executor, services)",
+            "aperture.close_and_verify()",
+            "result",
+        ),
+    )
+    require_tokens(
+        "preactivation",
+        item("preactivation", "with_canonical_body_recovery_ingress"),
+        "ordinary preactivation canonical-recovery aperture",
+        (
+            "self.with_canonical_body_recovery_ingress_transaction(runner, activation, operation)",
+        ),
+    )
+    if sources["lifecycle_run_inner"].count(
+        "recover_canonical_bodies_before_activation("
+    ) != 3:
+        errors.append(
+            f"{paths['lifecycle_run_inner']}: lifecycle startup must retain one "
+            "canonical recovery helper and exactly two startup repair call sites"
+        )
+
+    runner_ingress_retire = item("runner", "retire_lifecycle_runner_ingress")
+    require_order(
+        "runner",
+        runner_ingress_retire,
+        "shared lifecycle runner ingress retirement",
+        (
+            "ingress_ready.store(false, Ordering::Release)",
+            "block_ingress.close()",
+            "Arc::ptr_eq(block_ingress, launched_ingress)",
+        ),
+    )
+    for owner in (
+        "ProductionLifecycleRunnerActivationV1",
+        "ProductionLifecycleCompleteTipRunnerActivationV1",
+    ):
+        matches = [
+            rust_item
+            for rust_item in rust_items(
+                sources["runner_authority"], "retire_unpublished"
+            )
+            if rust_item.brace_context == (("impl", owner),)
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{paths['runner_authority']}: {owner} must retain one consuming "
+                f"unpublished retirement; found {len(matches)}"
+            )
+        else:
+            require_tokens(
+                "runner_authority",
+                matches[0],
+                f"{owner} unpublished retirement",
+                ("retire_lifecycle_runner_ingress(",),
+            )
+
+    shutdown_finish = item("launch", "finish_clean_shutdown")
+    require_order(
+        "launch",
+        shutdown_finish,
+        "lifecycle clean-shutdown tail",
+        (
+            "self.leader_wire_ingress_binding.retire()",
+            "runner_retirement",
+            "ingress_retirement",
+            "let Some(operation) = operation",
+            "self.services.allow_clean_shutdown()",
+            "operation.complete()",
+        ),
+    )
+    complete_tip_shutdown_tail = [
+        rust_item
+        for rust_item in rust_items(
+            sources["launch"], "into_complete_tip_clean_shutdown"
+        )
+        if rust_item.brace_context
+        == (("impl", "LaunchedProductionLifecycleV1"),)
+    ]
+    if len(complete_tip_shutdown_tail) != 1:
+        errors.append(
+            f"{paths['launch']}: CompleteTip lifecycle shutdown must retain "
+            f"one sealed inner tail; found {len(complete_tip_shutdown_tail)}"
+        )
+    else:
+        require_order(
+            "launch",
+            complete_tip_shutdown_tail[0],
+            "CompleteTip lifecycle clean-shutdown tail",
+            (
+                "output_guard.begin_fail_stop_operation()",
+                "runner.retire_unpublished(&self.leader_wire_ingress_binding.ingress)",
+                "drop(retirement)",
+                "self.finish_clean_shutdown(operation, runner_retirement)",
+            ),
+        )
+    launched_shutdowns = [
+        rust_item
+        for rust_item in rust_items(sources["launch"], "into_clean_shutdown")
+        if rust_item.brace_context == (("impl", "LaunchedProductionLifecycleV1"),)
+    ]
+    active_shutdowns = [
+        rust_item
+        for rust_item in rust_items(sources["launch"], "into_clean_shutdown")
+        if rust_item.brace_context == (("impl", "ActivatedProductionLifecycleV1"),)
+    ]
+    for label, candidates, markers in (
+        (
+            "unpublished lifecycle clean shutdown",
+            launched_shutdowns,
+            (
+                "output_guard.begin_fail_stop_operation()",
+                "runner.retire_unpublished(&self.leader_wire_ingress_binding.ingress)",
+                "self.finish_clean_shutdown(operation, runner_retirement)",
+            ),
+        ),
+        (
+            "active lifecycle clean shutdown",
+            active_shutdowns,
+            (
+                "mut launched",
+                "local_proposal",
+                "runner_activation",
+                "output_guard.begin_fail_stop_operation()",
+                "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
+                "drop(local_proposal)",
+                "launched.finish_clean_shutdown(operation, runner_retirement)",
+            ),
+        ),
+    ):
+        if len(candidates) != 1:
+            errors.append(
+                f"{paths['launch']}: {label} must retain one consuming method; "
+                f"found {len(candidates)}"
+            )
+            continue
+        require_order("launch", candidates[0], label, markers)
+        for forbidden in (
+            "into_finalized_parts",
+            "rollover_finalized_height_outputs",
+            "stage_finalized_height_all_row_retirement",
+            "finish_height(",
+        ):
+            if _token_sequence_count(
+                rust_code_tokens(candidates[0].source), rust_code_tokens(forbidden)
+            ):
+                errors.append(
+                    f"{paths['launch']}:{candidates[0].line}: {label} must not "
+                    f"claim finality through {forbidden!r}"
+                )
+
+    complete_tip_setup = [
+        rust_item
+        for rust_item in rust_items(sources["ledger"], "with_runner_setup")
+        if rust_item.brace_context
+        == (("impl", "LaunchedRecoveredCompleteTipSuccessorLifecycleV1"),)
+    ]
+    if len(complete_tip_setup) != 1:
+        errors.append(
+            f"{paths['ledger']}: CompleteTip closed-ingress runner setup must "
+            f"remain one sealed delegate; found {len(complete_tip_setup)}"
+        )
+    else:
+        require_order(
+            "ledger",
+            complete_tip_setup[0],
+            "CompleteTip sealed closed-ingress runner setup",
+            (
+                "runner",
+                "operation",
+                "E: From<super::launch::ProductionLifecyclePreActivationErrorV1>",
+                "self.launched.with_runner_setup(runner, operation)",
+            ),
+        )
+
+    complete_tip_shutdown = [
+        rust_item
+        for rust_item in rust_items(sources["ledger"], "into_clean_shutdown")
+        if rust_item.brace_context
+        == (("impl", "LaunchedRecoveredCompleteTipSuccessorLifecycleV1"),)
+    ]
+    if len(complete_tip_shutdown) != 1:
+        errors.append(
+            f"{paths['ledger']}: CompleteTip clean shutdown must remain one "
+            f"sealed delegate; found {len(complete_tip_shutdown)}"
+        )
+    else:
+        require_order(
+            "ledger",
+            complete_tip_shutdown[0],
+            "CompleteTip sealed clean shutdown",
+            (
+                "let Self {",
+                "launched",
+                "retirement",
+                "} = self",
+                "launched.into_complete_tip_clean_shutdown(runner, retirement)",
+            ),
+        )
+
+    shutdown_behavior = item(
+        "startup_test",
+        "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+    )
+    require_tokens(
+        "startup_test",
+        shutdown_behavior,
+        "production lifecycle clean-shutdown behavior",
+        (
+            ".with_runner_setup(&mut setup_runner",
+            "launch_non_pending_lifecycle_height_and_shutdown_for_test(",
+            ".into_clean_shutdown(&mut runner)",
+        ),
+    )
+    require_order(
+        "startup_test",
+        shutdown_behavior,
+        "production unpublished lifecycle clean-shutdown behavior",
+        (
+            "if shutdown_before_activation",
+            "launch_non_pending_lifecycle_height_and_shutdown_for_test(",
+            "None",
+            "assert!(!ingress_ready.load(Ordering::Acquire))",
+            "assert!(!leader_wire_ingress.state.lock().open)",
+            "assert!(!output_guard.restart_required())",
+            "continue",
+        ),
+    )
+    complete_tip_shutdown_behavior = item(
+        "startup_test",
+        "complete_tip_launched_lifecycle_shuts_down_without_publishing_successor",
+    )
+    require_order(
+        "startup_test",
+        complete_tip_shutdown_behavior,
+        "production CompleteTip lifecycle clean-shutdown behavior",
+        (
+            "complete_tip_lifecycle_shutdown_fixture()",
+            "launch_non_pending_lifecycle_height_and_shutdown_for_test(",
+            "Some(retirement)",
+            "assert!(!ingress_ready.load(Ordering::Acquire))",
+            "assert!(!ingress_state.open)",
+            "assert!(ingress_state.certified_serve_gate.is_none())",
+            "assert!(ingress_state.leader_wire_lifecycle_gate.is_none())",
+            "assert!(!output_guard.restart_required())",
+            "assert!(crate::sumeragi::status::v2_status().is_none())",
+        ),
+    )
+    require_order(
+        "startup_test",
+        shutdown_behavior,
+        "production active lifecycle clean-shutdown behavior",
+        (
+            "if shutdown_after_activation",
+            ".into_clean_shutdown(&mut runner)",
+            "assert!(!ingress_ready.load(Ordering::Acquire))",
+            "assert!(!leader_wire_ingress.state.lock().open)",
+            "assert!(!output_guard.restart_required())",
+            "crate::sumeragi::status::clear_v2_status()",
+            "continue",
+        ),
+    )
 
     outcome_source = sources["driver"]
     completion_outcome_start = outcome_source.find(
@@ -3383,7 +3037,9 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "backpressured certified Serve remains lifecycle-owned",
         "released auxiliary capacity must admit exact Serve",
         "ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)",
-        "ProductionPreparedCertifiedServeTestSettlementV1::AdmittedAborted",
+        "consume exact admitted Serve handoff",
+        "drain_lifecycle_v2_ingress(",
+        "drain one exact lifecycle-owned ordinary batch",
     ):
         if token not in startup_source:
             errors.append(
@@ -3392,8 +3048,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             )
     if ".drive_ingress_turn(" in sources["runner"]:
         errors.append(
-            f"{paths['runner']}: queue-owned ordinary ingress prerequisite must "
-            "remain unwired from run_inner"
+            f"{paths['runner']}: run_inner must enter the lifecycle child instead "
+            "of bypassing its owner through a direct ingress-driver call"
         )
 
     prepared_owner_start = sources["ordinary_consumer"].find(
@@ -3563,11 +3219,69 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                     f"consumer exposes forbidden seam {forbidden!r}"
                 )
 
+    lifecycle_height_driver = item("height_driver", "drain_lifecycle_v2_ingress")
+    require_order(
+        "height_driver",
+        lifecycle_height_driver,
+        "activated lifecycle ordinary Completion/Runtime/Ingress batch",
+        (
+            "executor.has_retained_certified_body_response()",
+            "services.lifecycle_output_guard()",
+            "outer_ingress_turns(limit, context_id, height)",
+            "LifecycleRunnerRankTarget::Completion",
+            "services.certified_serve_barrier_request_hash()",
+            "activated.drive_completion_turn(current_turn, lane_work)",
+            "services.drain_completions(executor)?",
+            "LifecycleRunnerRankTarget::Runtime",
+            "services.certified_serve_barrier()",
+            "advance_executor(receiver, executor, services, 1)?",
+            "LifecycleRunnerRankTarget::Ingress",
+            "activated.drive_ingress_turn(current_turn)",
+            "activated.consume_prepared_ordinary_ingress_turn(",
+        ),
+    )
+    require_tokens(
+        "height_driver",
+        lifecycle_height_driver,
+        "activated lifecycle ordinary batch selected outcomes",
+        (
+            "ProductionLifecycleCompletionTurnV1::PassThrough(ordinary_turn,)",
+            "ProductionLifecycleCompletionTurnV1::Selected(_selected,)",
+            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
+            "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued",
+            "ProductionLifecycleIngressSelectionV1::CapacityPending",
+            "ProductionLifecycleIngressSelectionV1::Retry",
+            "ProductionLifecycleIngressSelectionV1::OrdinaryRetained",
+            "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        ),
+    )
+    if lifecycle_height_driver is not None:
+        height_driver_tokens = rust_code_tokens(lifecycle_height_driver.source)
+        for forbidden in (
+            "output_guard: &Arc<ConsensusOutputGuard>",
+            "drain_v2_ingress(",
+            "V2IngressDrainMode",
+        ):
+            if _token_sequence_count(height_driver_tokens, rust_code_tokens(forbidden)):
+                errors.append(
+                    f"{paths['height_driver']}:{lifecycle_height_driver.line}: "
+                    "activated lifecycle ordinary batch exposes obsolete or "
+                    f"caller-substitutable surface {forbidden!r}"
+                )
+    if sources["lifecycle_run_inner"].count("drain_lifecycle_v2_ingress(") != 2:
+        errors.append(
+            f"{paths['lifecycle_run_inner']}: activated lifecycle loop must route "
+            "exactly its Serve-barrier and main ordinary batches through the "
+            "shared lifecycle height driver"
+        )
+
     preactivation_start = sources["runner"].find(
         "pub(in crate::sumeragi) struct ProductionLifecyclePreActivationRunnerBorrowV1"
     )
     preactivation_end = sources["runner"].find(
-        "/// Cadence-derived process-local deadline", preactivation_start
+        "/// Exact reducer facts which own one local proposal-side work item.",
+        preactivation_start,
     )
     preactivation_region = (
         sources["runner"][preactivation_start:preactivation_end]
@@ -3589,6 +3303,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "LocalProposalState::from_recovered_lifecycle_attempt(true, directive)",
         "fn local_proposal_state_is_pristine(",
         "fn prepared_local_proposal_exactly_matches(",
+        "fn prepared_local_proposal_mut(",
+        "self.local_proposal.as_mut()",
     ):
         if required not in preactivation_region:
             errors.append(
@@ -3673,10 +3389,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"forbidden surface {forbidden!r}"
             )
     prepared_state_behavior = item(
-        "launch", "prepared_local_proposal_state_is_affine_and_context_directive_bound"
+        "launch_tests", "prepared_local_proposal_state_is_affine_and_context_directive_bound"
     )
     require_order(
-        "launch",
+        "launch_tests",
         prepared_state_behavior,
         "affine prepared local-Proposal state behavior",
         (
@@ -3691,6 +3407,19 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"{paths['runner']}: opaque lifecycle local-Proposal state "
                 f"exposes forbidden surface {forbidden!r}"
             )
+    live_proposal_behavior = item(
+        "startup_test", "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout"
+    )
+    require_order(
+        "launch_tests",
+        live_proposal_behavior,
+        "activated lifecycle retains the exact runner local-Proposal owner",
+        (
+            "activated.with_runner_runtime(",
+            "services.matches_lifecycle_executor_output_guard(executor)",
+            "assert!(local_proposal.already_attempted(directive))",
+        ),
+    )
 
     runtime_clock = item("runtime", "lifecycle_live_clocks_are_armed")
     require_tokens(
@@ -3806,11 +3535,11 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                     f"exposes forbidden Proposal mutation {forbidden!r}"
                 )
     fail_stop_behavior = item(
-        "launch",
+        "launch_tests",
         "preactivation_fail_stop_scope_closes_on_drop_and_disarms_on_complete",
     )
     require_order(
-        "launch",
+        "startup_test",
         fail_stop_behavior,
         "preactivation non-permit fail-stop behavior",
         (
@@ -3821,7 +3550,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     require_tokens(
-        "launch",
+        "startup_test",
         fail_stop_behavior,
         "preactivation non-permit fail-stop behavior",
         (
@@ -3831,10 +3560,88 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     )
 
     run_inner = item("runner", "run_inner")
-    if run_inner is not None and "ProductionLifecyclePreActivationRunnerBorrowV1" in run_inner.source:
+    require_order(
+        "runner",
+        run_inner,
+        "PendingKura and ordinary heights split into sealed lifecycle loops",
+        (
+            "let pending_kura_apply = recovered.pending_kura_apply()",
+            "match pending_kura_apply",
+            "None => lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+            "Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(",
+        ),
+    )
+    lifecycle_loop = item("lifecycle_run_inner", "run_non_pending_lifecycle_loop")
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_loop,
+        "sealed non-Pending lifecycle startup and activation",
+        (
+            "V2BodyStore::open_with_policy(",
+            ".into_quarantined_recovered_startup()",
+            "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
+            ".authenticate_final_wal_startup_authority()",
+            "bind_production_lifecycle_owner_factory_inputs_v1(",
+            "open_production_lifecycle_owner_v1(",
+            "launch_non_pending_lifecycle_height(",
+            "ProductionLifecyclePreActivationRunnerBorrowV1::mint_for_recovered_runner()",
+            "recover_canonical_bodies_before_activation(",
+            "initialize_recovered_local_proposal(setup_runner)",
+            "let height_started_at = Instant::now()",
+            "preactivation.activate(height_started_at, local_proposal)",
+            "run_lifecycle_active_height(",
+        ),
+    )
+    lifecycle_active = item("lifecycle_run_inner", "run_lifecycle_active_height")
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_active,
+        "lifecycle live-height finalization and successor storage handoff",
+        (
+            "drain_lifecycle_v2_ingress(",
+            "finalize_lifecycle_height(",
+            "Some(certified_serve_producer_episode)",
+            "DurableV2PredecessorIdentity::authenticate(artifact, receipt)",
+            "build_verified_successor(",
+            "into_parts_with_lifecycle_storage_authority(",
+        ),
+    )
+    lifecycle_finalization = item("lifecycle_run_inner", "finalize_lifecycle_height")
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_finalization,
+        "lifecycle finalization output/store/cleanup transaction",
+        (
+            "activated.into_finalized_rollover(active_runner)",
+            "drop(producer_episode)",
+            "finalized.finality()",
+            "prepare_successor(receipt, artifact, &mut lane_work)",
+            "finalized.rollover_outputs(",
+            "post_output.retire_lifecycle_stores()",
+            "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
+        ),
+    )
+    require_order(
+        "lifecycle_run_inner",
+        lifecycle_active,
+        "certified-Serve producer episode spans the complete live runner turn",
+        (
+            "let certified_serve_barrier = services.certified_serve_barrier()",
+            "service_retained_certified_response(",
+            "service_certified_serve_barrier( certified_serve_barrier,",
+            "let certified_serve_producer_episode = activated.with_runner_runtime(",
+            "let ready_to_finish = activated.with_runner_runtime(",
+            "if ready_to_finish",
+            "finalize_lifecycle_height(",
+            "Some(certified_serve_producer_episode)",
+            "schedule_local_proposal(",
+        ),
+    )
+    if lifecycle_active is not None and "V2IngressDrainMode::Ordinary" in lifecycle_active.source:
         errors.append(
-            f"{paths['runner']}:{run_inner.line}: lifecycle preactivation setup "
-            "must remain unwired until the atomic runner cutover"
+            f"{paths['lifecycle_run_inner']}:{lifecycle_active.line}: lifecycle "
+            "live height must not bypass owner settlement through the legacy "
+            "ordinary ingress mode"
         )
     startup_setup = item(
         "startup_test",
@@ -4009,7 +3816,67 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "self.executor.local_proposal_directive()",
             "local_proposal.exactly_matches( self.executor.context().id(), current_directive )",
             "ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch",
-            "self.executor.arm_live_clocks(now)",
+            "let clock_activation = ProductionLifecycleLiveClockActivationPermitV1",
+            "self.executor.arm_live_clocks(clock_activation, now)",
+        ),
+    )
+    clock_permit_start = sources["launch"].find(
+        "pub(in crate::sumeragi) struct ProductionLifecycleLiveClockActivationPermitV1"
+    )
+    clock_permit_end = sources["launch"].find(
+        "/// Move-only authority for refreshing the live Certified-Serve retirement cut.",
+        clock_permit_start,
+    )
+    clock_permit = (
+        sources["launch"][clock_permit_start:clock_permit_end]
+        if clock_permit_start >= 0 and clock_permit_end > clock_permit_start
+        else ""
+    )
+    for required in (
+        "_seal: ProductionLifecycleLiveClockActivationPermitSealV1",
+        "struct ProductionLifecycleLiveClockActivationPermitSealV1;",
+        "impl Drop for ProductionLifecycleLiveClockActivationPermitSealV1",
+        "#[cfg(test)]",
+        "pub(in crate::sumeragi) fn for_test() -> Self",
+    ):
+        if required not in clock_permit:
+            errors.append(
+                f"{paths['launch']}: ordinary live-clock permit omits {required!r}"
+            )
+    for forbidden in (
+        "derive(Clone)",
+        "derive(Copy)",
+        "pub _seal:",
+        "pub(crate) _seal:",
+        "pub(in crate::sumeragi) _seal:",
+    ):
+        if forbidden in clock_permit:
+            errors.append(
+                f"{paths['launch']}: ordinary live-clock permit exposes {forbidden!r}"
+            )
+    clock_arm = item("effects", "arm_live_clocks")
+    require_order(
+        "effects",
+        clock_arm,
+        "affine ordinary live-clock arming",
+        (
+            "_permit: ProductionLifecycleLiveClockActivationPermitV1",
+            "if self.pending_tip_recovery.is_some()",
+            "return Err(RuntimeClockError::PendingKuraRecovery)",
+            "self.runtime.arm_live_clocks(now)",
+        ),
+    )
+    pending_status = item("effects", "pending_kura_activation_status_snapshot")
+    require_order(
+        "effects",
+        pending_status,
+        "completed pending-Kura no-clock status snapshot",
+        (
+            "self.ready_to_finish()",
+            "self.lifecycle_live_clocks_are_unarmed()",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "return Err(AdapterError::PendingKuraActivationNotReady)",
+            "self.runtime.pending_kura_activation_status_snapshot()",
         ),
     )
     proposal_behavior = item(
@@ -4032,7 +3899,9 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     pending_types_start = pending_source.find(
         "pub(crate) struct PendingKuraRecoveredAdapterStartupV1"
     )
-    pending_types_end = pending_source.find("// TODO:", pending_types_start)
+    pending_types_end = pending_source.find(
+        "impl InstalledPendingKuraApplyV1", pending_types_start
+    )
     pending_types = (
         pending_source[pending_types_start:pending_types_end]
         if pending_types_start >= 0 and pending_types_end > pending_types_start
@@ -4048,6 +3917,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "wal_identity: RecoveredWalFrameIdentity",
         "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
         "effect: AdapterEffect",
+        "pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1",
+        "genesis: Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>",
     ):
         if required not in pending_types:
             errors.append(
@@ -4065,6 +3936,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "pub wal_identity:",
         "pub replay_evidence:",
         "pub effect:",
+        "pub genesis:",
         "fn into_parts(",
         "fn effect(",
         "fn fetch(",
@@ -4074,16 +3946,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                 f"{paths['pending_kura']}: opaque pending-Kura replay types "
                 f"expose forbidden surface {forbidden!r}"
             )
-    if (
-        "TODO: Route the recovery plan's PendingKura branch through this sealed"
-        not in pending_source
-        or "dedicated no-clock lane-recovery/finalization state" not in pending_source
-    ):
-        errors.append(
-            f"{paths['pending_kura']}: pending-Kura bridge must retain its exact "
-            "no-clock runner-wiring TODO"
-        )
-
     bind_pending = item("pending_kura", "bind_pending_kura_apply")
     require_order(
         "pending_kura",
@@ -4177,17 +4039,110 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "owner.with_pending_kura_apply_replay(replay)",
         ),
     )
-    launched_pending_install = item("preactivation", "install_pending_kura_apply")
+    launched_pending_install = item("pending_lifecycle", "install_pending_kura_apply")
     require_order(
-        "preactivation",
+        "pending_lifecycle",
         launched_pending_install,
         "fail-stop pending-Kura preactivation install",
         (
             "self.pending_kura_apply_replay.take()",
             "self.services.lifecycle_output_guard()",
-            "missing_pending_kura_replay(output_guard.as_ref())",
+            "super::preactivation::missing_pending_kura_replay(output_guard.as_ref(),)",
             "self.with_runner_setup(runner",
             "replay.install(executor, services)",
+            "PendingKuraProductionLifecycleV1 { installed, launched: self, }",
+        ),
+    )
+    pending_apply_turn = item("pending_lifecycle", "drive_apply_recovery_turn")
+    require_order(
+        "pending_lifecycle",
+        pending_apply_turn,
+        "closed-ingress pending-Kura Apply recovery turn",
+        (
+            "self.launched.pending_kura_apply_replay.is_some()",
+            "close_admission_for_restart()",
+            "self.launched.with_runner_setup(runner",
+            "executor.pending_kura_apply_recovery_evidence()",
+            "services.drain_completions(executor)?",
+            "executor.step_pending_tip_recovery(Instant::now(), services)?",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "executor.ready_to_finish()",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Completed",
+        ),
+    )
+    reject_tokens(
+        "pending_lifecycle",
+        pending_apply_turn,
+        "closed-ingress pending-Kura Apply recovery turn",
+        (
+            "arm_live_clocks(",
+            "schedule_local_proposal(",
+            "drive_ingress_turn(",
+        ),
+    )
+    pending_lane = item("pending_lifecycle", "prepare_lane_recovery")
+    require_order(
+        "pending_lifecycle",
+        pending_lane,
+        "affine pending-Kura lane preparation",
+        (
+            "let expected = self.installed.expected()",
+            "services.matches_installed_pending_kura_tip(expected)",
+            "let mut lane_work = operation(expected, executor, services)?",
+            "services.matches_lifecycle_lane_work(&lane_work)",
+            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)?",
+            "let _ = self.installed.take_genesis()",
+            "PreparedPendingKuraLaneRecoveryV1 { installed, lane_work, launched, }",
+        ),
+    )
+    pending_activation = item("pending_lifecycle", "activate_no_clock")
+    require_order(
+        "pending_lifecycle",
+        pending_activation,
+        "pending-Kura no-clock status and ingress activation",
+        (
+            "launched.executor.lifecycle_live_clocks_are_unarmed()",
+            "launched.executor.ready_to_finish()",
+            "matches_installed_pending_kura_tip(installed.expected())",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "begin_fail_stop_operation()",
+            "pending_kura_activation_status_snapshot()",
+            "completion_observer_activation.take()",
+            "activate_effect_completion_observer(observer)",
+            "runner.open_and_publish_recovered_height(",
+            "activation.complete()",
+            "PendingKuraActivatedProductionLifecycleV1 { runner_activation, installed, lane_work, launched, }",
+        ),
+    )
+    reject_tokens(
+        "pending_lifecycle",
+        pending_activation,
+        "pending-Kura no-clock status and ingress activation",
+        (
+            "arm_live_clocks(",
+            "successor_activation_status_snapshot(",
+            "schedule_local_proposal(",
+        ),
+    )
+    pending_finalization = item("pending_lifecycle", "into_finalized_rollover")
+    require_order(
+        "pending_lifecycle",
+        pending_finalization,
+        "pending-Kura affine lane finalization",
+        (
+            "self.launched.executor.ready_to_finish()",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "matches_installed_pending_kura_tip(self.installed.expected())",
+            "matches_lifecycle_lane_work(&self.lane_work)",
+            "exactly_covers_finalization_work(&self.launched.owner.coordinator)",
+            "runner_activation.retire(&launched.leader_wire_ingress_binding.ingress)",
+            "drop(installed)",
+            "launched.leader_wire_ingress_binding.retire()",
+            "executor.into_finalized_parts()",
+            "finish_height(&receipt, &artifact)",
+            "FinalizedProductionLifecycleRolloverV1",
+            "lane_work",
         ),
     )
     missing_pending = item("preactivation", "missing_pending_kura_replay")
@@ -4221,7 +4176,187 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "lifecycle_activation_recovery_blocker(",
             "close_admission_for_restart()",
-            "self.executor.arm_live_clocks(now)",
+            "let clock_activation = ProductionLifecycleLiveClockActivationPermitV1",
+            "self.executor.arm_live_clocks(clock_activation, now)",
+        ),
+    )
+    pending_runner = item("pending_runner", "run_pending_kura_lifecycle_height")
+    require_order(
+        "pending_runner",
+        pending_runner,
+        "sealed pending-Kura lifecycle startup and ordinary successor handoff",
+        (
+            "close_ingress_for_rollover(&ingress_ready, &block_rx)",
+            "V2BodyStore::open_with_policy(",
+            ".into_quarantined_recovered_startup()",
+            "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
+            ".bind_pending_kura_apply(pending_kura_apply)",
+            ".authenticate_final_wal_startup_authority()?",
+            "bind_production_lifecycle_owner_factory_inputs_v1(",
+            "open_production_lifecycle_owner_v1(",
+            "let launched = owner.launch(launch_inputs)?",
+            "ProductionLifecyclePendingKuraRunnerActivationV1::mint_for_recovered_runner(",
+            "launched.install_pending_kura_apply(&mut setup_runner)?",
+            "pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)?",
+            "reconcile_pending_lane_startup(",
+            "pending.prepare_lane_recovery(",
+            "prepared.activate_no_clock(activation)?",
+            "run_pending_active_height(",
+            "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+        ),
+    )
+    reject_tokens(
+        "pending_runner",
+        pending_runner,
+        "sealed pending-Kura lifecycle startup and ordinary successor handoff",
+        (
+            "arm_live_clocks(",
+            "schedule_local_proposal(",
+            "V2NposVrfLifecycle::new(",
+            "V2BlockSyncDiscovery::new(",
+            "drain_lifecycle_v2_ingress(",
+            "step_pacemaker_once(",
+        ),
+    )
+    pending_live = item("pending_runner", "run_pending_active_height")
+    require_order(
+        "pending_runner",
+        pending_live,
+        "restricted pending-Kura live recovery and finalization",
+        (
+            "executor.has_retained_certified_body_response()",
+            "services.certified_serve_barrier()",
+            "service_pending_certified_serve_barrier(",
+            "services.try_begin_certified_serve_producer_episode()",
+            "retry_exact_output_and_apply_sidecar_admissions(",
+            "services.service_kura_replica_advert_refresh_turn(Instant::now())",
+            "services.drain_completions(executor)?",
+            "retry_exact_output_and_apply_sidecar_admissions(",
+            "reconcile_executor_locked_body(executor, services)?",
+            "drain_decided_lane_recovery_ingress(",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?",
+            "activated.into_finalized_rollover(&mut active_runner)?",
+            "drop(certified_serve_producer_episode)",
+            "finalized.finality()",
+            "into_parts_with_lifecycle_storage_authority(",
+            "finalized.rollover_outputs(",
+            "post_output.retire_lifecycle_stores()?",
+            "cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor)",
+        ),
+    )
+    reject_tokens(
+        "pending_runner",
+        pending_live,
+        "restricted pending-Kura live recovery and finalization",
+        (
+            "arm_live_clocks(",
+            "schedule_local_proposal(",
+            "drain_lifecycle_v2_ingress(",
+            "step_pacemaker_once(",
+        ),
+    )
+    pending_barrier = item("pending_runner", "service_pending_certified_serve_barrier")
+    require_order(
+        "pending_runner",
+        pending_barrier,
+        "pending-Kura Serve barrier forbids pacemaker work",
+        (
+            "service_certified_serve_barrier_liveness_turn(true, |action| match action",
+            "CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix",
+            "drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?",
+            "CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode",
+            "CertifiedServeBarrierLivenessAction::Pacemaker",
+            "output_guard.close_admission_for_restart()",
+            "Err(V2RunnerError::Service(",
+        ),
+    )
+    pending_crash_hook = item("apply_tests", "fail_after_kura_store_for_test")
+    require_tokens(
+        "apply_tests",
+        pending_crash_hook,
+        "production pending-Kura Kura-first crash hook",
+        (
+            "self.test_failures.kura_store.store(true, std::sync::atomic::Ordering::Relaxed)",
+        ),
+    )
+    pending_lane_fixture = item("lane_work", "pending_kura_lifecycle_fixture_for_test")
+    require_order(
+        "lane_work",
+        pending_lane_fixture,
+        "unactivated affine pending-Kura lane fixture",
+        (
+            "Self::new_with_output_guard_and_transport_for_test(",
+            "None",
+            "Some(expected)",
+            "output_guard",
+            "exact_output_handoff_owner",
+        ),
+    )
+    reject_tokens(
+        "lane_work",
+        pending_lane_fixture,
+        "unactivated affine pending-Kura lane fixture",
+        (
+            "activate_for_test_without_lane_drain_queue(",
+            "activate_after_lane_drain_queue_install(",
+        ),
+    )
+    pending_lifecycle_behavior = item(
+        "startup_test", "exercise_pending_kura_production_lifecycle"
+    )
+    require_order(
+        "startup_test",
+        pending_lifecycle_behavior,
+        "executable pending-Kura lifecycle shutdown and finalization",
+        (
+            "owner.launch(launch_inputs)",
+            ".install_pending_kura_apply(&mut setup_runner)",
+            ".drive_apply_recovery_turn(&mut setup_runner, 64)",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Completed",
+            ".prepare_lane_recovery(",
+            "pending_kura_lifecycle_fixture_for_test(",
+            ".activate_no_clock(activation)",
+            "executor.lifecycle_live_clocks_are_unarmed()",
+            "if !finalize",
+            ".into_clean_shutdown(&mut active_runner)",
+            "services.try_begin_certified_serve_producer_episode()",
+            ".into_finalized_rollover(&mut active_runner)",
+            "drop(producer_episode)",
+            ".rollover_outputs(&mut active_runner, lane_work, &successor, 64)",
+            ".retire_lifecycle_stores()",
+            "cleanup_ready.finish_cleanup(Duration::ZERO, &mut cleanup_supervisor)",
+        ),
+    )
+    if pending_lifecycle_behavior is not None:
+        unarmed_count = _token_sequence_count(
+            rust_code_tokens(pending_lifecycle_behavior.source),
+            rust_code_tokens("executor.lifecycle_live_clocks_are_unarmed()"),
+        )
+        if unarmed_count != 2:
+            errors.append(
+                f"{paths['startup_test']}:{pending_lifecycle_behavior.line}: executable "
+                "pending-Kura lifecycle must assert unarmed clocks before and after "
+                f"activation; found {unarmed_count} assertions"
+            )
+    pending_lifecycle_fixture = item(
+        "startup_test",
+        "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+    )
+    require_order(
+        "startup_test",
+        pending_lifecycle_fixture,
+        "production Kura-first pending-Kura lifecycle fixture",
+        (
+            "(0xB5_u8, true, false, false, Some(false))",
+            "(0xB6_u8, true, false, false, Some(true))",
+            "semantic_probe.fail_after_kura_store_for_test()",
+            "V2ApplyError::InjectedCrashAfterKuraStore",
+            "drop(body_store)",
+            ".into_quarantined_recovered_startup()",
+            ".bind_pending_kura_apply(expected)",
+            ".authenticate_final_wal_startup_authority()",
+            ".open_production_lifecycle_owner_v1(",
+            "exercise_pending_kura_production_lifecycle(",
         ),
     )
     pending_behavior = item(
@@ -4259,16 +4394,4 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                     f"{paths['wal_test']}:{pending_behavior.line}: pending-Kura bridge "
                     f"behavior omits exact fail-closed assertion {message!r}"
                 )
-    if run_inner is not None:
-        for forbidden in (
-            "bind_pending_kura_apply(",
-            "install_pending_kura_apply(",
-            "PreparedRecoveredPendingKuraApplyReplayV1",
-        ):
-            if forbidden in run_inner.source:
-                errors.append(
-                    f"{paths['runner']}:{run_inner.line}: sealed pending-Kura "
-                    f"bridge crossed the runner before its no-clock cutover: {forbidden!r}"
-                )
-
     return errors

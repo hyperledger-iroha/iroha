@@ -5209,7 +5209,43 @@
         "required_tokens": [
           "let kura_replica_advert_refresh = Arc::new(",
           "KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())",
-          "Arc::clone(&kura_replica_advert_refresh)",
+          "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+          "lifecycle_pending_kura::run_pending_kura_lifecycle_height("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "kind": "fn",
+        "symbol": "run_non_pending_lifecycle_loop",
+        "required_tokens": [
+          "ProductionLifecycleLaunchInputsV1::new(",
+          "Arc::clone(&kura_replica_advert_refresh)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "kind": "fn",
+        "symbol": "run_pending_kura_lifecycle_height",
+        "required_tokens": [
+          "ProductionLifecycleLaunchInputsV1::new(",
+          "Arc::clone(&kura_replica_advert_refresh)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "kind": "fn",
+        "symbol": "run_lifecycle_active_height",
+        "required_tokens": [
+          "try_begin_certified_serve_producer_episode()",
+          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+        "kind": "fn",
+        "symbol": "run_pending_active_height",
+        "required_tokens": [
+          "try_begin_certified_serve_producer_episode()",
           ".service_kura_replica_advert_refresh_turn(Instant::now())"
         ]
       },
@@ -6913,24 +6949,87 @@
           "kind": "fn",
           "symbol": "run_inner",
           "required_tokens": [
-            "pending_tip_recovery_attempts",
-            "lane_reservation_startup_reconciliation_pending",
+            "let reservation_reconciliation_pending = true",
+            "match pending_kura_apply",
+            "lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+            "lifecycle_pending_kura::run_pending_kura_lifecycle_height("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+          "kind": "method",
+          "symbol": "PendingKuraProductionLifecycleV1::drive_apply_recovery_turn",
+          "required_tokens": [
+            "executor.pending_tip_recovery_attempts()",
+            "services.drain_completions(executor)?",
+            "executor.step_pending_tip_recovery(Instant::now(), services)?",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "executor.ready_to_finish()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_non_pending_lifecycle_loop",
+          "required_tokens": [
+            "close_ingress_for_rollover",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
+            "retransmit_interval",
+            "round_timeout",
             "plan_lane_application_evidence_repair",
             "LaneApplicationEvidenceRepairPlanning::Ready(plan) if plan.is_empty()",
             "plan.item_count()",
             "begin_fail_stop_operation",
             "apply_lane_application_evidence_repair",
             "summary.publication_count()",
-            "summary.ordinary_pairs",
             "made no bounded progress",
             "LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies",
+            "recover_canonical_bodies_before_activation",
+            "plan_lane_reservation_ownership",
+            "lane_reservation_startup_reconciliation_pending()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_lane_startup",
+          "required_tokens": [
+            "plan_lane_application_evidence_repair",
+            "LaneApplicationEvidenceRepairPlanning::Ready(plan) if plan.is_empty()",
+            "plan.item_count()",
+            "begin_fail_stop_operation",
+            "apply_lane_application_evidence_repair",
+            "summary.publication_count()",
+            "made no bounded progress",
+            "LaneApplicationEvidenceRepairPlanning::RecoverCanonicalBodies",
+            "recover_pending_canonical_bodies",
+            "plan_lane_reservation_ownership",
+            "lane_reservation_startup_reconciliation_pending()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "recover_canonical_bodies_before_activation",
+          "required_tokens": [
             "canonical_executed_block_recovery_batches",
             "CanonicalExecutedBlockRecovery::new",
             "body_recovery.service_next()",
             "drain_canonical_executed_block_recovery_ingress",
-            "dispatch_canonical_executed_block_recovery_effects",
-            "close_ingress_for_rollover",
-            "plan_lane_reservation_ownership"
+            "dispatch_canonical_executed_block_recovery_effects"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "recover_pending_canonical_bodies",
+          "required_tokens": [
+            "canonical_executed_block_recovery_batches",
+            "CanonicalExecutedBlockRecovery::new",
+            "body_recovery.service_next()",
+            "drain_canonical_executed_block_recovery_ingress",
+            "dispatch_canonical_executed_block_recovery_effects"
           ]
         },
         {
@@ -7145,19 +7244,49 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
           "kind": "fn",
-          "symbol": "run_inner",
+          "symbol": "run_pending_kura_lifecycle_height",
           "required_tokens": [
-            "service_next_native_participant_recovery_request",
-            "next_lane_retransmit",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
             "retransmit_interval",
+            "round_timeout"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_lifecycle_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
+            "service_historical_recovery_tick(&mut lane_work)?",
             "schedule_autonomous_new_view_timeouts",
             "schedule_retransmission",
             "deadline_after(now, retransmit_interval)",
-            "block_sync_frame_byte_capacity",
-            "service_historical_recovery_tick",
-            "dispatch_lane_work_effects"
+            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "run_pending_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
+            "service_historical_recovery_tick(lane_work)?",
+            "schedule_autonomous_new_view_timeouts",
+            "schedule_retransmission",
+            "deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs",
+          "kind": "fn",
+          "symbol": "service_historical_recovery_tick",
+          "required_tokens": [
+            "service_next_historical_recovery()",
+            "map_err(V2RunnerError::from)"
           ]
         },
         {
@@ -8927,6 +9056,18 @@
           "kind": "fn",
           "symbol": "run_inner",
           "required_tokens": [
+            "public_key: genesis_public_key",
+            "block_cadence",
+            "sumeragi_v2_timing_ms(block_cadence_ms)",
+            "let round_timeout = Duration::from_millis(round_timeout_ms)",
+            "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_non_pending_lifecycle_loop",
+          "required_tokens": [
             "if reservation_reconciliation_pending",
             "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
             "let planning = plan_lane_reservation_ownership(",
@@ -8934,16 +9075,67 @@
             "apply_lane_reservation_reconciliation_plan(",
             "reservation_reconciliation_pending = false;",
             "construct_after_pending_tip_application_recovery(",
-            "public_key: genesis_public_key",
-            "block_cadence",
-            "sumeragi_v2_timing_ms(block_cadence_ms)",
-            "let round_timeout = Duration::from_millis(round_timeout_ms)",
-            "let retransmit_interval = Duration::from_millis(retransmit_interval_ms)",
-            "lane_work_limits(",
-            "block_sync_frame_byte_capacity,\n            retransmit_interval,\n            round_timeout,\n        )?;",
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
             "retransmit_interval",
-            "round_timeout",
-            "service_historical_recovery_tick"
+            "round_timeout"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_lane_startup",
+          "required_tokens": [
+            "reconcile_lifecycle_terminal_outcomes_before_queue_planning(",
+            "let planning = plan_lane_reservation_ownership(",
+            "reconcile_autonomous_lifecycle_startup(",
+            "apply_lane_reservation_reconciliation_plan("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+          "kind": "method",
+          "symbol": "PendingKuraProductionLifecycleV1::prepare_lane_recovery",
+          "required_tokens": [
+            "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)?;"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "run_pending_kura_lifecycle_height",
+          "required_tokens": [
+            "let lane_work_limits = lane_work_limits(",
+            "block_sync_frame_byte_capacity",
+            "retransmit_interval",
+            "round_timeout"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+          "kind": "fn",
+          "symbol": "run_lifecycle_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
+            "service_historical_recovery_tick(&mut lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
+          "kind": "fn",
+          "symbol": "run_pending_active_height",
+          "required_tokens": [
+            "let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval)",
+            "service_historical_recovery_tick(lane_work)?",
+            "lane_work.schedule_autonomous_new_view_timeouts(",
+            "lane_work.schedule_retransmission()?",
+            "next_lane_retransmit = deadline_after(now, retransmit_interval)",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?"
           ]
         },
         {
@@ -10261,7 +10453,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs",
           "kind": "fn",
           "symbol": "service_historical_recovery_tick",
           "required_tokens": [

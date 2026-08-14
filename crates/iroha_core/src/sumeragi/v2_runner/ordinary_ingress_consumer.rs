@@ -4,7 +4,7 @@
 //! lifecycle turn driver. Both paths move the already-dequeued carrier into
 //! [`PreparedDequeuedV2IngressV1`] and consume it through the single tail in
 //! this module, so control, lane, Serve, block-sync, payload, and NPoS routing
-//! cannot drift during the runner cutover.
+//! cannot drift between ordinary lifecycle heights and other exact consumers.
 
 use super::*;
 

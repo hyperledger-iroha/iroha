@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 855
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 856
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "a40a9d7ef0dafcad2a6e3eb710d550a7f80f905c378117ef9a52b39a86d77b1e"
+        "327e13cc5b9853ec8a36d3c0e8b1805bb3c33ebe0dc923be87ffd502859b3a21"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "aa1e14a1f3c77859ce5470ffa804ce1bcac2921b1f98b3f9544a0243ecda1c1f"
+        "2d28e8534542516af51faf4f1ade8ecbf1c0489212e5403cbdec02c61ad8cdbd"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -182,9 +182,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 855
+    assert receipt_module._PRODUCTION_TEST_COUNT == 856
     assert receipt_module._G_UNIT_TEST_COUNT == 525
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 855
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 856
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -194,7 +194,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 61
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
-    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 133
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 134
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
@@ -335,6 +335,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     runner_source = read_reviewed_source_bundle(
         "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
+    ordinary_lifecycle_runner_source = (
+        ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
+    ).read_text(encoding="utf-8")
+    pending_lifecycle_runner_source = (
+        ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
+    ).read_text(encoding="utf-8")
+    lifecycle_launch_source = (
+        ROOT_DIR / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+    ).read_text(encoding="utf-8")
     runner_tests_source = read_reviewed_source_bundle(
         "crates/iroha_core/src/sumeragi/v2_runner_tests.rs"
     )
@@ -613,7 +624,28 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "require_validator_storage_platform(" in lane_work_source
     assert "sumeragi_v2_validator_storage_supported()" in lane_work_source
     assert 'cfg!(any(target_os = "linux", target_os = "macos"))' in kura_source
-    run_inner = runner_source[runner_source.index("fn run_inner(") :]
+    run_inner_items = module.rust_items(runner_source, "run_inner")
+    assert len(run_inner_items) == 1
+    run_inner = run_inner_items[0].source
+    ordinary_loop_items = module.rust_items(
+        ordinary_lifecycle_runner_source, "run_non_pending_lifecycle_loop"
+    )
+    ordinary_launch_items = module.rust_items(
+        ordinary_lifecycle_runner_source, "launch_non_pending_lifecycle_height"
+    )
+    pending_loop_items = module.rust_items(
+        pending_lifecycle_runner_source, "run_pending_kura_lifecycle_height"
+    )
+    pending_reconcile_items = module.rust_items(
+        pending_lifecycle_runner_source, "reconcile_pending_lane_startup"
+    )
+    assert len(ordinary_loop_items) == len(ordinary_launch_items) == 1
+    assert len(pending_loop_items) == 1
+    assert len(pending_reconcile_items) == 1
+    ordinary_loop = ordinary_loop_items[0].source
+    ordinary_launch = ordinary_launch_items[0].source
+    pending_loop = pending_loop_items[0].source
+    pending_reconcile = pending_reconcile_items[0].source
     runner_platform_gate = run_inner.index("    require_validator_storage_platform(")
     runner_gate_end = run_inner.index("    )?;", runner_platform_gate)
     runner_gate = run_inner[runner_platform_gate:runner_gate_end]
@@ -621,21 +653,36 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     for side_effect in (
         "output_guard\n        .begin_fail_stop_operation()",
         "recover_active_height_with_plan(",
-        "let wal_path =",
-        "SumeragiV2Adapter::open",
-        "ProductionV2Services::start",
-        "V2LaneWorkAdapter::new_with_output_guard_and_transport",
     ):
         assert runner_platform_gate < run_inner.index(side_effect)
+    ordinary_handoff = run_inner.index(
+        "lifecycle_run_inner::run_non_pending_lifecycle_loop("
+    )
+    pending_handoff = run_inner.index(
+        "lifecycle_pending_kura::run_pending_kura_lifecycle_height("
+    )
+    assert runner_platform_gate < ordinary_handoff < pending_handoff
+    ordinary_adapter_open = ordinary_loop.index(
+        "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry("
+    )
+    ordinary_launch_call = ordinary_loop.index(
+        "launch_non_pending_lifecycle_height(", ordinary_adapter_open
+    )
+    assert ordinary_adapter_open < ordinary_launch_call
+    assert "owner.launch(inputs)?" in ordinary_launch
+    pending_adapter_open = pending_loop.index(
+        "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry("
+    )
+    pending_launch_call = pending_loop.index("owner.launch(", pending_adapter_open)
+    assert pending_adapter_open < pending_launch_call
+    assert "ProductionV2Services::start_with_apply_service(" in lifecycle_launch_source
     recovered_context = run_inner.index("let recovered = recover_active_height_with_plan(")
     recovered_parts = run_inner.index("    ) = recovered.into_parts();", recovered_context)
     lifecycle_generation_claim = run_inner.index(
         "claim_runner_lifecycle_process_generation("
     )
-    first_lane_service = run_inner.index(
-        "V2LaneWorkAdapter::new_with_output_guard_and_transport("
-    )
-    assert recovered_parts < lifecycle_generation_claim < first_lane_service
+    assert recovered_parts < lifecycle_generation_claim < ordinary_handoff
+    assert lifecycle_generation_claim < pending_handoff
     membership_gate = run_inner.index(
         "local_validator_index(verified_context.context(), &local_peer, config.role)?;"
     )
@@ -745,17 +792,41 @@ kura.claim_autonomous_lifecycle_process_generation(
         )
         is None
     )
-    startup_reconcile = run_inner.index(
-        "reconcile_autonomous_lifecycle_startup(", lifecycle_generation_claim
+    ordinary_startup_reconcile = ordinary_loop.index(
+        "reconcile_autonomous_lifecycle_startup("
     )
-    startup_claim_handoff = run_inner.index(
-        "_lifecycle_process_generation.as_ref(),", startup_reconcile
+    ordinary_startup_claim_handoff = ordinary_loop.index(
+        "lifecycle_process_generation.as_ref(),", ordinary_startup_reconcile
     )
-    adapter_claim_handoff = run_inner.index(
-        "_lifecycle_process_generation.clone(),", first_lane_service
+    ordinary_lane_service = ordinary_loop.index(
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport("
     )
-    assert lifecycle_generation_claim < startup_reconcile < startup_claim_handoff
-    assert startup_claim_handoff < first_lane_service < adapter_claim_handoff
+    ordinary_adapter_claim_handoff = ordinary_loop.index(
+        "lifecycle_process_generation.clone(),", ordinary_lane_service
+    )
+    assert ordinary_startup_reconcile < ordinary_startup_claim_handoff
+    assert ordinary_startup_claim_handoff < ordinary_lane_service
+    assert ordinary_lane_service < ordinary_adapter_claim_handoff
+    pending_startup_reconcile = pending_reconcile.index(
+        "reconcile_autonomous_lifecycle_startup("
+    )
+    pending_startup_claim_handoff = pending_reconcile.index(
+        "lifecycle_process_generation,", pending_startup_reconcile
+    )
+    pending_reconcile_call = pending_loop.index("reconcile_pending_lane_startup(")
+    pending_reconcile_claim_handoff = pending_loop.index(
+        "lifecycle_process_generation.as_ref(),", pending_reconcile_call
+    )
+    pending_lane_service = pending_loop.index(
+        "V2LaneWorkAdapter::new_with_output_guard_and_transport("
+    )
+    pending_adapter_claim_handoff = pending_loop.index(
+        "lifecycle_process_generation.clone(),", pending_lane_service
+    )
+    assert pending_startup_reconcile < pending_startup_claim_handoff
+    assert pending_reconcile_call < pending_reconcile_claim_handoff
+    assert pending_reconcile_claim_handoff < pending_lane_service
+    assert pending_lane_service < pending_adapter_claim_handoff
     lane_constructor_start = lane_work_source.index(
         "    fn new_with_output_guard_and_transport_inner("
     )
@@ -783,15 +854,22 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     drive = activation.index("self.drive_lane_sessions();")
     assert hydration < queue_revalidation < drive
-    queue_install = run_inner.index(
+    queue_install = ordinary_loop.index(
         "lane_work.install_lane_drain_queue(Arc::clone(&queue))?;"
     )
-    lane_activation = run_inner.index(
+    lane_activation = ordinary_loop.index(
         "lane_work.activate_after_lane_drain_queue_install(&queue)?;"
     )
     assert queue_install < lane_activation
-    assert "config.role == NodeRole::Validator," in run_inner
-    assert "local_validator.is_some()," not in run_inner
+    for lifecycle_source in (ordinary_loop, pending_loop):
+        lane_constructor = lifecycle_source[
+            lifecycle_source.index(
+                "V2LaneWorkAdapter::new_with_output_guard_and_transport("
+            ) :
+        ]
+        lane_constructor = lane_constructor[: lane_constructor.index(".map_err(")]
+        assert "config.role == NodeRole::Validator," in lane_constructor
+        assert "local_validator.is_some()," not in lane_constructor
     assert "(NodeRole::Observer, _) => Ok(None)" in runner_source
     assert (
         module._kura_retirement_progress_production_source_fidelity_errors(
@@ -2003,8 +2081,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 855
-    assert len(set(production_inventory)) == 855
+    assert len(production_inventory) == 856
+    assert len(set(production_inventory)) == 856
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2050,10 +2128,11 @@ kura.claim_autonomous_lifecycle_process_generation(
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
         "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
-        "sumeragi::v2_worker::tests::exact_serve_predecessor_episode_services_older_local_without_admitting_later_io",
-        "sumeragi::v2_worker::tests::repeated_exact_serve_claims_close_all_older_sources_before_later_io",
-        "sumeragi::v2_worker::tests::completed_exact_serve_episode_reopens_once_for_new_runtime_witness",
-        "sumeragi::v2_worker::tests::exact_serve_claim_waits_out_full_control_prefix_before_older_causal_admission",
+        "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_services_older_local_without_admitting_later_io",
+        "sumeragi::v2_worker::tests::repeated_exact_serve_admissions_close_all_older_sources_before_later_io",
+        "sumeragi::v2_worker::tests::dropping_exact_serve_predecessor_admission_closes_transient_aperture",
+        "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_is_transient_and_barrier_bound",
+        "sumeragi::v2_worker::tests::exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work",
         "sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers",
         "sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal",
         "sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission",
@@ -2115,12 +2194,12 @@ kura.claim_autonomous_lifecycle_process_generation(
     )
     late_passive_fetch_regression = (
         "sumeragi::v2_effects::tests::"
-        "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps"
+        "late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps"
     )
     assert late_passive_fetch_regression in production_inventory
     assert late_passive_fetch_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 436
-    assert "readonly expected_production_liveness_test_count=855" in release_source
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 437
+    assert "readonly expected_production_liveness_test_count=856" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2130,7 +2209,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 855" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 856" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2140,7 +2219,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 855
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 856
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -3469,7 +3548,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=855"
+    canonical_declaration = "readonly canonical_production_test_count=856"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3491,8 +3570,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=855"
-    weakened = "readonly expected_production_liveness_test_count=854"
+    canonical = "readonly expected_production_liveness_test_count=856"
+    weakened = "readonly expected_production_liveness_test_count=855"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
@@ -3542,8 +3621,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     guard_mutations = (
         (
             canonical_declaration,
-            "readonly canonical_production_test_count=854",
-            "must seal exactly 855 production tests",
+            "readonly canonical_production_test_count=855",
+            "must seal exactly 856 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 72,',
@@ -3566,7 +3645,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "a40a9d7ef0dafcad2a6e3eb710d550a7"',
+            '    "327e13cc5b9853ec8a36d3c0e8b1805b"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
@@ -4307,7 +4386,7 @@ def test_installers_use_fixed_urls_and_literal_checksums() -> None:
         ),
         (
             "482297997",
-            "3ca4c39613e58b90e46a385ee61e2c7f17375c19854ea1a35e056d6eb902071c",
+            "3ca4c39613e58b90e46a385ee61e2c7f17375c19855ea1a35e056d6eb902071c",
         ),
     ):
         assert f'RELEASE_ASSET_ID="{asset_id}"' in tlapm_source

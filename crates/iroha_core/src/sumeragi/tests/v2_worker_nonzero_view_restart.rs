@@ -302,7 +302,10 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     assert_eq!(retained.subject, proposal_subject);
 
     executor
-        .arm_live_clocks(started_at)
+        .arm_live_clocks(
+            crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started_at,
+        )
         .expect("arm post-recovery pacemaker");
     assert_eq!(
         executor

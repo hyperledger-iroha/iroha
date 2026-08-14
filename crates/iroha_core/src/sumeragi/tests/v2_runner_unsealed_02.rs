@@ -423,7 +423,7 @@ fn exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift() {
 }
 
 #[test]
-fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
+fn recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 3, Generation::new(9));
     let round = wire::ConsensusRound {
@@ -431,47 +431,11 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         height: context.height,
         view: tag.view(),
     };
-    let body = b"replayed proposal payload";
     let subject = wire::BlockSubject {
         parent_block_hash: None,
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replayed proposal block")),
-        payload_hash: Hash::new(body),
+        payload_hash: Hash::new(b"replayed proposal payload"),
     };
-    let manifest = encode_payload(&context, round, subject, body)
-        .expect("encode replayed proposal fixture payload")
-        .manifest()
-        .clone();
-    let proposal = wire::Proposal {
-        round,
-        proposer: context.leader(round.view),
-        subject,
-        manifest,
-        justification: wire::ProposalJustification::ParentCommit(wire::ParentCommitJustification {
-            certificate: None,
-        }),
-        signature: Vec::new(),
-    };
-    let effects = [
-        AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-        )),
-        AdapterEffect::Sign {
-            tag,
-            request: SignRequest::Proposal(proposal),
-        },
-    ];
-
-    let replayed = replayed_proposal_sign(&effects).expect("extract exact replay owner");
-    assert_eq!(
-        replayed,
-        ReplayedProposalSign {
-            tag,
-            round,
-            subject,
-        }
-    );
-    assert_eq!(replayed_proposal_sign(&effects[..1]), None);
-    assert_eq!(replayed_proposal_sign(&[]), None);
 
     let directive = |locked_subject: Option<wire::BlockSubject>,
                      decided_subject: Option<wire::BlockSubject>| {
@@ -507,46 +471,20 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         "a second bind must reject the already-owned runner state"
     );
     assert!(setup.already_attempted(unlocked));
-    assert_eq!(
-        LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
-        Some(LocalProposalOwner::from(unlocked))
-    );
-
     let exact_lock = directive(Some(subject), None);
-    assert_eq!(
-        LocalProposalState::from_replayed_proposal(Some(replayed), exact_lock).attempted,
-        Some(LocalProposalOwner::from(exact_lock)),
-        "the exact replayed subject owns current locked-body work"
-    );
+    assert!(recovered.exactly_matches_directive(exact_lock));
 
     let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
     assert!(!recovered.exactly_matches_directive(foreign_lock));
-    assert!(
-        LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
-            .attempted
-            .is_none(),
-        "an equal-tag proposal for another subject cannot reserve the current lock owner"
+    let mismatched_round = super::super::v2::RecoveredLifecycleLocalProposalAttemptV1::for_test(
+        tag,
+        wire::ConsensusRound { view: 2, ..round },
+        subject,
     );
-
-    let mismatched_round = ReplayedProposalSign {
-        round: wire::ConsensusRound { view: 2, ..round },
-        ..replayed
-    };
-    assert!(
-        LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
-            .attempted
-            .is_none(),
-        "the replayed proposal round must match its reducer tag"
-    );
+    assert!(!mismatched_round.exactly_matches_directive(unlocked));
 
     let decided = directive(Some(subject), Some(subject));
     assert!(!recovered.exactly_matches_directive(decided));
-    assert!(
-        LocalProposalState::from_replayed_proposal(Some(replayed), decided)
-            .attempted
-            .is_none(),
-        "a decision retires every replayed proposal reservation"
-    );
 }
 
 #[test]
@@ -731,6 +669,29 @@ fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
     assert!(!complete_tip_ready.load(Ordering::Acquire));
     assert!(!complete_tip_ingress.state.lock().open);
     assert!(super::super::status::v2_status().is_none());
+    complete_tip
+        .retire_unpublished(&complete_tip_ingress)
+        .expect("retire unpublished CompleteTip activation");
+
+    let pending_ready = Arc::new(AtomicBool::new(false));
+    let pending_ingress = configured_ingress();
+    let mut pending = ProductionLifecyclePendingKuraRunnerActivationV1::for_test(
+        Arc::clone(&pending_ready),
+        Arc::clone(&pending_ingress),
+    );
+    {
+        let aperture = pending
+            .open_canonical_recovery_ingress(&pending_ingress)
+            .expect("borrow exact pending-Kura activation ingress");
+        assert!(pending_ready.load(Ordering::Acquire));
+        assert!(aperture.ingress().state.lock().open);
+    }
+    assert!(!pending_ready.load(Ordering::Acquire));
+    assert!(!pending_ingress.state.lock().open);
+    assert!(super::super::status::v2_status().is_none());
+    pending
+        .retire_unpublished(&pending_ingress)
+        .expect("retire unpublished pending-Kura activation");
 
     let foreign = configured_ingress();
     assert!(matches!(
@@ -739,6 +700,37 @@ fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
     ));
     assert!(!ready.load(Ordering::Acquire));
     assert!(!ingress.state.lock().open);
+    activation
+        .retire_unpublished(&ingress)
+        .expect("retire exact unpublished ordinary activation after rejection");
+}
+
+#[test]
+fn pending_kura_runner_activation_publishes_current_height_without_successor_authority() {
+    let _status_guard = super::super::status::rbc_status_test_guard();
+    super::super::status::clear_v2_status();
+    let (context, _) = context();
+    let ready = Arc::new(AtomicBool::new(false));
+    let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
+    ingress
+        .configure_roster(std::iter::empty())
+        .expect("configure pending-Kura activation ingress");
+    let activation = ProductionLifecyclePendingKuraRunnerActivationV1::for_test(
+        Arc::clone(&ready),
+        Arc::clone(&ingress),
+    );
+    let expected = runner_status(&context);
+    let activated = activation
+        .open_and_publish_recovered_height(&ingress, expected.clone())
+        .expect("publish recovered current-height status without successor authority");
+    assert!(ready.load(Ordering::Acquire));
+    assert!(ingress.state.lock().open);
+    assert_eq!(super::super::status::v2_status(), Some(expected));
+
+    drop(activated);
+    assert!(!ready.load(Ordering::Acquire));
+    assert!(!ingress.state.lock().open);
+    super::super::status::clear_v2_status();
 }
 
 #[test]

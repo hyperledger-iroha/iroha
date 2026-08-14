@@ -9,6 +9,8 @@ def _timeout_vote_episode_source_fidelity_errors(
     base = repo_root / "crates/iroha_core/src/sumeragi"
     ingress_path = base / "mod.rs"
     runner_path = base / "v2_runner.rs"
+    lifecycle_runner_path = base / "v2_runner" / "lifecycle_run_inner.rs"
+    pending_runner_path = base / "v2_runner" / "lifecycle_pending_kura.rs"
     runtime_path = base / "v2_runtime.rs"
     worker_path = base / "v2_worker.rs"
     formal_dir = formal_dir or repo_root / "formal/sumeragi_v2"
@@ -16,12 +18,14 @@ def _timeout_vote_episode_source_fidelity_errors(
     paths = {
         "ingress": ingress_path,
         "runner": runner_path,
+        "lifecycle_runner": lifecycle_runner_path,
+        "pending_runner": pending_runner_path,
         "runtime": runtime_path,
         "worker": worker_path,
     }
     sources: dict[str, str] = {}
     for role, path in paths.items():
-        if role == "ingress" and path.is_file() and not path.is_symlink():
+        if role in {"ingress", "worker"} and path.is_file() and not path.is_symlink():
             _reviewed_path, sources[role] = _read_reviewed_rust_source(
                 repo_root,
                 path.relative_to(repo_root).as_posix(),
@@ -168,14 +172,41 @@ def _timeout_vote_episode_source_fidelity_errors(
         (),
         "queue-local timeout-vote barrier verdict",
     )
-
-    run_inner = bind_item(
-        "runner::run_inner",
-        "runner",
-        "run_inner",
+    shared_selector = bind_item(
+        "ingress::select_fair_v2_ingress_candidate",
+        "ingress",
+        "select_fair_v2_ingress_candidate",
         (),
-        "three-mode retained-response runner",
-        expected_attributes=("#[allow(clippy::too_many_lines)]",),
+        "shared strict-before-dependency fair-ingress selector",
+    )
+
+    retained_response = bind_item(
+        "lifecycle_runner::service_retained_certified_response",
+        "lifecycle_runner",
+        "service_retained_certified_response",
+        (),
+        "ordinary lifecycle retained-response timeout episode",
+        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    ordinary_serve = bind_item(
+        "lifecycle_runner::service_certified_serve_barrier",
+        "lifecycle_runner",
+        "service_certified_serve_barrier",
+        (),
+        "ordinary lifecycle selected-Serve timeout episode",
+        expected_attributes=(
+            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
+        ),
+    )
+    pending_serve = bind_item(
+        "pending_runner::service_pending_certified_serve_barrier",
+        "pending_runner",
+        "service_pending_certified_serve_barrier",
+        (),
+        "no-clock pending-Kura selected-Serve timeout episode",
+        expected_attributes=(
+            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
+        ),
     )
     drain = bind_item(
         "runner::drain_v2_ingress",
@@ -264,7 +295,10 @@ def _timeout_vote_episode_source_fidelity_errors(
         "ingress::try_recv_if_at_checked",
         "ingress::try_recv_if_at_checked_classified",
         "ingress::fair_v2_ingress_queue_gate_verdict",
-        "runner::run_inner",
+        "ingress::select_fair_v2_ingress_candidate",
+        "lifecycle_runner::service_retained_certified_response",
+        "lifecycle_runner::service_certified_serve_barrier",
+        "pending_runner::service_pending_certified_serve_barrier",
         "runner::drain_v2_ingress",
         "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against",
         "runtime::RuntimeTimeoutVoteEpisodeOwner::same_lifecycle_owner_as",
@@ -402,14 +436,32 @@ let dependency_bypass = !ingress_barrier_allows
     )
     _require_rust_token_sequence(
         ingress_path,
-        selector,
+        shared_selector,
         """
-if selected.is_none() {
-    'bypass: for (source_index, source_candidates) in candidates.iter().enumerate() {
-        for (admission_ordinal, inbound, dependency_bypass, obsolete) in source_candidates {
-            if *dependency_bypass && (*obsolete || predicate(inbound.as_ref())) {
+for dependency_pass in [false, true] {
+    for (source_index, source_candidates) in candidates.iter().enumerate() {
+        for candidate in source_candidates {
+            let (ordinal, gate, obsolete) = projection(candidate);
+            let dependency = gate == FairV2IngressQueueGateVerdict::Dependency;
+            if gate == FairV2IngressQueueGateVerdict::Blocked || dependency != dependency_pass {
+                continue;
+            }
+            if obsolete || predicate(candidate) {
 """,
         "barrier dependencies must run only after ordinary candidates and still execute the downstream predicate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        selector,
+        """
+let selected = select_fair_v2_ingress_candidate(
+    &candidates,
+    |(admission_ordinal, _, gate, obsolete)| (*admission_ordinal, *gate, *obsolete),
+    |(_, inbound, _, _)| predicate(inbound.as_ref()),
+);
+""",
+        "the checked dequeue must delegate its frozen occurrences and downstream predicate to the shared strict-before-dependency selector",
         errors,
     )
     if selector is not None:
@@ -505,160 +557,189 @@ if mode != V2IngressDrainMode::Ordinary {
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        run_inner,
+        lifecycle_runner_path,
+        retained_response,
         """
 if response_backpressured {
     if executor.retained_response_may_admit_certified_fence_escape() {
         drain_v2_ingress(
-            &block_rx,
-            &mut executor,
-            &mut services,
-            &mut lane_work,
-            output_guard.as_ref(),
-            kura.as_ref(),
-            &common_config.key_pair,
-            block_sync_server
-                .as_mut()
-                .expect("block-sync server initialized before ingress"),
-            &mut block_sync,
-            &mut block_sync_request,
-            &mut npos_vrf,
+            receiver,
+            executor,
+            services,
+            lane_work,
+            output_guard,
+            kura,
+            key_pair,
+            block_sync_server,
+            block_sync,
+            block_sync_request,
+            npos_vrf,
             V2IngressDrainMode::CertifiedFenceEscape,
             1,
         )?;
     }
     drain_v2_ingress(
-        &block_rx,
-        &mut executor,
-        &mut services,
-        &mut lane_work,
-        output_guard.as_ref(),
-        kura.as_ref(),
-        &common_config.key_pair,
-        block_sync_server
-            .as_mut()
-            .expect("block-sync server initialized before ingress"),
-        &mut block_sync,
-        &mut block_sync_request,
-        &mut npos_vrf,
+        receiver,
+        executor,
+        services,
+        lane_work,
+        output_guard,
+        kura,
+        key_pair,
+        block_sync_server,
+        block_sync,
+        block_sync_request,
+        npos_vrf,
         V2IngressDrainMode::TimeoutVoteEpisode,
         1,
     )?;
     executor.reconcile_retained_response_certified_fence_escape_phase();
-    advance_pacemaker_once(&block_rx, &mut executor, &mut services)?;
+    advance_pacemaker_once(receiver, executor, services)?;
+    executor.reconcile_retained_response_certified_fence_escape_phase();
+}
 """,
         "retained-response backpressure must give a conditional one-shot certificate drain and then an unconditional distinct TimeoutVote drain before pacemaker service",
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        run_inner,
+        lifecycle_runner_path,
+        ordinary_serve,
         """
-if !recovering_interrupted_tip {
-    drain_v2_ingress(
-        &block_rx,
-        &mut executor,
-        &mut services,
-        &mut lane_work,
-        output_guard.as_ref(),
-        kura.as_ref(),
-        &common_config.key_pair,
-        block_sync_server
-            .as_mut()
-            .expect("block-sync server initialized before ingress"),
-        &mut block_sync,
-        &mut block_sync_request,
-        &mut npos_vrf,
-        V2IngressDrainMode::CertifiedFenceEscape,
-        1,
-    )?;
-}
 let completion_evidence = services
     .certified_serve_predecessor_completion_evidence(
         executor.remaining_completion_capacity() != 0,
         serve_barrier.scheduler_ordinal(),
     )
     .map_err(V2RunnerError::Service)?;
-let predecessor_witness = executor
-    .exact_serve_predecessor_episode_witness(
+let predecessor = executor.exact_serve_predecessor_observation(
+    Instant::now(),
+    serve_barrier.scheduler_ordinal(),
+    completion_evidence,
+)?;
+let predecessor_admission = predecessor
+    .should_open_predecessor_admission()
+    .then(|| {
+        services
+            .open_certified_serve_predecessor_admission(serve_barrier)
+            .map_err(V2RunnerError::Service)
+    })
+    .transpose()?;
+if let Some(predecessor_admission) = predecessor_admission {
+    services
+        .drain_exact_serve_runtime_predecessor(executor, serve_barrier.scheduler_ordinal())?;
+    let completion_evidence = services
+        .certified_serve_predecessor_completion_evidence(
+            executor.remaining_completion_capacity() != 0,
+            serve_barrier.scheduler_ordinal(),
+        )
+        .map_err(V2RunnerError::Service)?;
+    let predecessor = executor.exact_serve_predecessor_observation(
         Instant::now(),
         serve_barrier.scheduler_ordinal(),
         completion_evidence,
     )?;
-if let Some(witness) = predecessor_witness {
-    let _ = services
-        .observe_certified_serve_predecessor_episode_witness(
-            serve_barrier,
-            witness,
-        )
-        .map_err(V2RunnerError::Service)?;
-}
-older_predecessor_remains = predecessor_witness.is_some();
-services
-    .finish_certified_serve_runtime_episode_turn(
-        serve_barrier,
-        older_predecessor_remains,
-    )
-    .map_err(V2RunnerError::Service)?;
+    if predecessor.has_runnable_predecessor()
+        && services
+            .certified_serve_predecessor_capacity_available(serve_barrier)
+            .map_err(V2RunnerError::Service)?
+    {
+        advance_executor_once_before_exact_serve(receiver, executor, services)?;
+    }
+    drain_v2_ingress(
+        receiver,
+        executor,
+        services,
+        lane_work,
+        output_guard,
+        kura,
+        key_pair,
+        block_sync_server,
+        block_sync,
+        block_sync_request,
+        npos_vrf,
+        V2IngressDrainMode::CertifiedFenceEscape,
+        1,
+    )?;
 """,
-        "selected Serve certificate escape must freshly project, re-publish, and "
-        "consume the exact predecessor witness inside the claimed older-runtime "
-        "episode before that one-shot claim is finished",
+        "selected Serve certificate escape must open one direct-observation "
+        "admission, drain its exact completion, and service at most one "
+        "capacity-gated predecessor before the bounded certificate escape",
         errors,
     )
     _require_rust_token_sequence(
-        runner_path,
-        run_inner,
+        lifecycle_runner_path,
+        ordinary_serve,
         """
-services
-    .finish_certified_serve_runtime_episode_turn(
-        serve_barrier,
-        older_predecessor_remains,
+let completion_evidence = services
+    .certified_serve_predecessor_completion_evidence(
+        executor.remaining_completion_capacity() != 0,
+        serve_barrier.scheduler_ordinal(),
     )
     .map_err(V2RunnerError::Service)?;
+let predecessor = executor.exact_serve_predecessor_observation(
+    Instant::now(),
+    serve_barrier.scheduler_ordinal(),
+    completion_evidence,
+)?;
+older_predecessor_remains = predecessor.has_runnable_predecessor();
+predecessor_admission
+    .finish()
+    .map_err(V2RunnerError::Service)?;
 }
-service_certified_serve_barrier_liveness_turn(
-    recovering_interrupted_tip,
-    claimed_older_runtime_episode,
-    |action| match action {
-        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
-            drain_v2_ingress(
-                &block_rx,
-                &mut executor,
-                &mut services,
-                &mut lane_work,
-                output_guard.as_ref(),
-                kura.as_ref(),
-                &common_config.key_pair,
-                block_sync_server
-                    .as_mut()
-                    .expect("block-sync server initialized before ingress"),
-                &mut block_sync,
-                &mut block_sync_request,
-                &mut npos_vrf,
-                V2IngressDrainMode::TimeoutVoteEpisode,
-                1,
-            )
-        }
+service_certified_serve_barrier_liveness_turn(false, |action| match action {
+        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => drain_v2_ingress(
+            receiver,
+            executor,
+            services,
+            lane_work,
+            output_guard,
+            kura,
+            key_pair,
+            block_sync_server,
+            block_sync,
+            block_sync_request,
+            npos_vrf,
+            V2IngressDrainMode::TimeoutVoteEpisode,
+            1,
+        ),
         CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-            if let Some(timeout_recovery_cut) =
-                executor.timeout_recovery_lifecycle_cut()?
-            {
-                services.drain_timeout_recovery_prefix_completion(
-                    &mut executor,
-                    timeout_recovery_cut,
-                )?;
+            if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
+                services
+                    .drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
             }
             Ok(())
         }
         CertifiedServeBarrierLivenessAction::Pacemaker => {
-            advance_pacemaker_once(&block_rx, &mut executor, &mut services)
+            advance_pacemaker_once(receiver, executor, services)
         }
-    },
-)?;
+})?;
 """,
-        "selected Serve must keep certificate escape inside the one-shot claim and map the complete timeout-recovery suffix outside that claim",
+        "selected Serve must close its move-only predecessor admission before "
+        "mapping the complete timeout-recovery suffix independently of it",
+        errors,
+    )
+    _require_rust_token_sequence(
+        pending_runner_path,
+        pending_serve,
+        """
+service_certified_serve_barrier_liveness_turn(true, |action| match action {
+    CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+        if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
+            services
+                .drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
+        }
+        Ok(())
+    }
+    CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode
+    | CertifiedServeBarrierLivenessAction::Pacemaker => {
+        output_guard.close_admission_for_restart();
+        Err(V2RunnerError::Service(
+            "pending Kura Serve barrier attempted pacemaker work".to_owned(),
+        ))
+    }
+})?;
+""",
+        "the no-clock pending-Kura Serve turn may service only an existing timeout-recovery prefix and must fail closed on TimeoutVote or pacemaker work",
         errors,
     )
 
