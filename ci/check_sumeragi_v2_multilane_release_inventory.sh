@@ -458,7 +458,8 @@ if runner_parent_source.count(
     reject("release runner support lexical-load edge is not exact")
 runner_support_functions = (
     "sha256_file", "canonical_executable", "canonical_git_executable",
-    "canonical_path", "resolve_pinned_rust_tool_executable",
+    "canonical_path", "authenticated_runner_tool_sources",
+    "resolve_pinned_rust_tool_executable",
     "release_identity_json", "identity_field",
     "localnet_binary_attestation_valid",
     "ensure_source_bound_localnet_binaries",

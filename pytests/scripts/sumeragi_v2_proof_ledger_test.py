@@ -990,7 +990,7 @@ def test_reviewed_obligation_inventory_rejects_retargeting(
     assert expected_error in errors
 
 
-def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> None:
+def test_repository_ledger_pins_exact_completion_statuses_and_dependencies() -> None:
     module = load_checker()
     ledger = module.load_ledger()
 
@@ -1004,8 +1004,8 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         application["symbol"]
         == "AsyncTemporalClosureApplicationCompletionProgressObligation"
     )
-    assert application["status"] == "specified_unproved"
-    assert ledger["machine_checked_completion"] is False
+    assert application["status"] == "tlaps_proved"
+    assert ledger["machine_checked_completion"] is True
 
     by_id = {
         obligation["id"]: obligation for obligation in ledger["obligations"]
@@ -1051,20 +1051,7 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         obligation["id"]
         for obligation in ledger["obligations"]
         if obligation["status"] == "specified_unproved"
-    ) == (
-        "effective-lock-body-acquisition-production-refinement",
-        "progress-witness-production-refinement",
-        "post-gst-deadlock-freedom",
-        "post-gst-starvation-freedom",
-        "timeout-view-liveness",
-        "rotating-leader-liveness",
-        "locked-body-reproposal",
-        "application-liveness",
-        "successor-activation-starvation-freedom",
-        "successor-activation-exact-recovery-production-refinement",
-        "genesis-height-successor-handoff",
-        "height-liveness",
-    )
+    ) == ()
     assert module.PROOF_STATUS_DEPENDENCIES == {
         "effective-lock-body-acquisition-production-refinement": (
             "effective-lock-body-acquisition-model",
@@ -1202,9 +1189,9 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         for status in module.STATUS_VALUES
     }
     assert current_target_counts == {
-        "tlaps_proved": 35,
-        "cross_tool_proved": 0,
-        "specified_unproved": 12,
+        "tlaps_proved": 44,
+        "cross_tool_proved": 3,
+        "specified_unproved": 0,
         "trusted_contract": 6,
         "out_of_scope": 1,
     }

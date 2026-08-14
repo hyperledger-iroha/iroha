@@ -1002,7 +1002,7 @@ _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
         "b25a9bde54862c23946d9a0565fd35f62eb94ef8f0eb31bee1487470fb164e95"
     ),
     "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement": (
-        "dc7fd3972ed40bfe639eb2602801003cdbc3a397ff3b8509ae5cc4404b537d2a"
+        "20ebeffbe165ee149930b7acff321bf44b64e4fe07f03ba4dad541304f429ec6"
     ),
     "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
         "500a95efa15a2105f4ed42cf80160fc7d1ba18173ecbcad7baf394a48db4894c"
@@ -1032,7 +1032,7 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
         "4756497a5ce66a906a0b1e8195afe6e6978c55f88acb1ea7ca0ae0bbce131de6"
     ),
     "v2_worker_certified_serve_budget_cases.rs": (
-        "9a29347f943ad5bfbf119d5e86a7f0e15a6694c1fbbac1294e07c73c83eb5b17"
+        "0bad66535d74184e0576248ed79fd63754bc38f82c765126459bdcf5489a61ff"
     ),
 }
 

@@ -2246,6 +2246,8 @@ invocation passes those protected paths and digests explicitly, for example:
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
   --runner-environment \
     IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST=/authenticated/scaling/scaling_evidence.json \
+  --runner-environment IROHA_RELEASE_TLA2TOOLS_JAR=/authenticated/tla2tools.jar \
+  --runner-environment IROHA_RELEASE_APALACHE_BIN=/authenticated/apalache/bin/apalache-mc \
   --runner-environment \
     IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256=<sha256> \
   --runner-environment \
@@ -2270,10 +2272,14 @@ input manifest is an exact closed 41-name map whose entries contain only the
 source path and expected SHA-256; after private copying, the sanitized marker
 derives and binds each archive identifier, mode, size, and digest without
 disclosing its source path. The bootstrap rejects writable or untrusted
-ancestors. Before candidate build code runs, the outer
-runner copies the named language/tool and exact shell-utility runtime closure
-to new private inodes and binds exact path-withheld source and
-private-destination inventories. The runner independently
+ancestors. Its flattened executable copies are bootstrap probe inputs, not
+toolchain-root locators: before candidate build code runs, the outer runner
+reauthenticates the manifest's original canonical executable paths and copies
+the complete Rust, Swift, Java, Verus, TLAPM, and Apalache distributions plus
+the named shell-utility runtime closure to new private inodes. TLAPM's standard
+library and prover backends and Apalache's pinned jar therefore remain inside
+their relocated distributions. The path-withheld source and private-destination
+inventories bind that closure. The runner independently
 validates that marker at entry, after sealing, and at every release-identity
 checkpoint before it executes another candidate helper. The bootstrap imposes
 no outer runtime or output-capture limit on the runner and never signals its

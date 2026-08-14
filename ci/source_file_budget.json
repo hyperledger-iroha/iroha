@@ -182,7 +182,7 @@
     "pytests/scripts/iso_rail_gateway_adapter_test.py": 5840,
     "pytests/scripts/iso_trust_bundle_verify_test.py": 4314,
     "pytests/scripts/iso_xsd_fixture_verify_test.py": 8472,
-    "pytests/scripts/sumeragi_v2_proof_ledger_test.py": 35848,
+    "pytests/scripts/sumeragi_v2_proof_ledger_test.py": 35835,
     "pytests/scripts/sumeragi_v2_release_receipt_test.py": 5102,
     "python/iroha_python/iroha_python_rs/src/lib.rs": 14698,
     "python/iroha_python/src/iroha_python/client.py": 21771,

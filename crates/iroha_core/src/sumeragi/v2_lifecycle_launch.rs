@@ -83,18 +83,6 @@ use crate::{
         },
     },
 };
-#[cfg(test)]
-use preactivation::ProductionLifecyclePreActivationFailStopScopeV1;
-pub(in crate::sumeragi) use preactivation::{
-    ProductionLifecyclePreActivationErrorV1, ProductionPendingKuraApplyInstallErrorV1,
-};
-#[cfg(test)]
-pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
-pub(in crate::sumeragi) use turn_driver::{
-    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
-    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
-    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
-};
 /// All non-lifecycle dependencies consumed by one production height launch.
 ///
 /// The immutable height context, roster proofs, adapter, and body store are not

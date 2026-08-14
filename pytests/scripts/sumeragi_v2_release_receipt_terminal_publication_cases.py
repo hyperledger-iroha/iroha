@@ -44,7 +44,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "54fdb6bca310890d4d5c195925ddafafb74c89ec7b33ce4cd339846177b5bdb4"
+        "81f55aaf916b04f9e0c8e165156a63ac3d451fff74fc5959a657e42bce8c9b21"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     bootstrap_completion = evidence["bootstrap_completion"]

@@ -1772,9 +1772,6 @@ def publish_validation_failure(
             _remove_published(path, metadata)
         raise
 
-
-
-
 def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_evidence_manifest: Path, expected_signer_fingerprint: str, expected_scaling_trial_harness_sha256: str, expected_scaling_configuration_sha256: str, expected_scaling_irohad_sha256: str, expected_scaling_iroha_cli_sha256: str) -> tuple[str, int]:
     component_name = VALIDATION_ACK_COMPONENT_FILES[0]
     sealed_component = source / "scripts" / component_name
@@ -2168,12 +2165,11 @@ _RELEASE_SHELL_UTILITY_NAMES = (
 _RELEASE_RUNTIME_NAMES = (
     "python3", "git", "ssh-keygen", "bash", "copy-release-runtime.py",
     "cargo", "rustc", "node",
-    "swift", "tlapm", "java", "verus", "cargo-verus", "tla2tools.jar",
-    "tlapm-stdlib", "git-upload-pack", "git-index-pack",
+    "swift", "tlapm", "apalache-mc", "java", "verus", "cargo-verus",
+    "tla2tools.jar", "git-upload-pack", "git-index-pack",
     *_RELEASE_SHELL_UTILITY_NAMES,
 )
-_PR_RUNTIME_NAMES = (
-    "python3", "git", "bash", "cargo", "rustc",
+_PR_RUNTIME_NAMES = ("python3", "git", "bash", "cargo", "rustc",
     "git-upload-pack", "git-index-pack",
     *_RELEASE_SHELL_UTILITY_NAMES,
 )
@@ -2631,12 +2627,14 @@ def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
     if names == _RELEASE_RUNTIME_NAMES:
         roots.update({
             "swift-toolchain": resolved[names.index("swift")].parent.parent,
+            "tlapm-distribution": resolved[names.index("tlapm")].parent.parent,
+            "apalache-distribution": resolved[names.index("apalache-mc")].parent.parent,
             "java-runtime": resolved[names.index("java")].parent.parent,
             "verus-distribution": resolved[names.index("verus")].parent,
         })
     for name, source in zip(names, resolved):
         if name not in {
-            "cargo", "rustc", "swift", "java", "verus", "cargo-verus",
+            "cargo", "rustc", "swift", "tlapm", "apalache-mc", "java", "verus", "cargo-verus",
         }:
             roots[name] = source
     framework_python = _framework_python_closure(resolved)
@@ -4262,10 +4260,13 @@ def _populate_runtime(
     source_roots = _runtime_source_roots(resolved)
     if names == _RELEASE_RUNTIME_NAMES:
         swift_root = source_roots["swift-toolchain"]
+        tlapm_root = source_roots["tlapm-distribution"]; apalache_root = source_roots["apalache-distribution"]
         java_root = source_roots["java-runtime"]
         verus_root = source_roots["verus-distribution"]
         if (
             resolved[names.index("swift")] != swift_root / "bin" / "swift"
+            or resolved[names.index("tlapm")] != tlapm_root / "bin" / "tlapm"
+            or resolved[names.index("apalache-mc")] != apalache_root / "bin" / "apalache-mc"
             or resolved[names.index("java")] != java_root / "bin" / "java"
             or resolved[names.index("verus")] != verus_root / "verus"
             or resolved[names.index("cargo-verus")]
@@ -4273,6 +4274,7 @@ def _populate_runtime(
         ):
             raise CacheCopyError("release runtime executables do not match their copied closures")
         copy_stable_tree(swift_root, runtime_root / "swift-toolchain", "Swift toolchain")
+        copy_stable_tree(tlapm_root, runtime_root / "tlapm-distribution", "TLAPM distribution"); copy_stable_tree(apalache_root, runtime_root / "apalache-distribution", "Apalache distribution")
         copy_stable_tree(java_root, runtime_root / "java-runtime", "Java runtime")
         copy_stable_tree(verus_root, runtime_root / "verus-distribution", "Verus distribution")
     for name, source in zip(names, resolved):
@@ -4280,6 +4282,10 @@ def _populate_runtime(
             destination = toolchain / "bin" / name
         elif name == "swift":
             destination = runtime_root / "swift-toolchain" / "bin" / name
+        elif name == "tlapm":
+            destination = runtime_root / "tlapm-distribution" / "bin" / name
+        elif name == "apalache-mc":
+            destination = runtime_root / "apalache-distribution" / "bin" / name
         elif name == "java":
             destination = runtime_root / "java-runtime" / "bin" / name
         elif name in {"verus", "cargo-verus"}:
@@ -4288,7 +4294,7 @@ def _populate_runtime(
             destination = (
                 runtime_root / name
                 if name in {
-                    "copy-release-runtime.py", "tla2tools.jar", "tlapm-stdlib",
+                    "copy-release-runtime.py", "tla2tools.jar",
                 }
                 else bin_root / name
             )
@@ -4296,11 +4302,13 @@ def _populate_runtime(
                 copy_stable_tree(source, destination, f"runtime source {name}")
             else:
                 copy_stable_file(source, destination, f"runtime source {name}")
-        if name in {"cargo", "rustc", "swift", "java", "verus", "cargo-verus"}:
+        if name in {"cargo", "rustc", "swift", "tlapm", "apalache-mc", "java", "verus", "cargo-verus"}:
             link = bin_root / name
             root_name = {
                 "cargo": "rust-toolchain/bin", "rustc": "rust-toolchain/bin",
                 "swift": "swift-toolchain/bin", "java": "java-runtime/bin",
+                "tlapm": "tlapm-distribution/bin",
+                "apalache-mc": "apalache-distribution/bin",
                 "verus": "verus-distribution", "cargo-verus": "verus-distribution",
             }[name]
             os.symlink(f"../{root_name}/{name}", link)

@@ -979,7 +979,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "f0895047b5a396ec9caf34b524b040e62685ec10443e9131e79971982cf95ddb"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "50b9a5ff2ec50669faca9da52fd2738b402b20975b055c42705bb8daf40ba303"
+        "a391f9061df6492166126ee1661b5285689001f7b70e4837e106e236bbb6cfda"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "2097b08c8f2d4989b8426985ecaa4544d5f43b9bf31f6bac8cfefc5a25ad3f1f"

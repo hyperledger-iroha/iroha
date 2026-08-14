@@ -979,10 +979,26 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     ordinary = {
         name: executable(loose_sources / name / name, f"{name} fixture 1")
         for name in (
-            "python3", "git", "ssh-keygen", "bash", "node", "tlapm",
+            "python3", "git", "ssh-keygen", "bash", "node",
             "git-upload-pack", "git-index-pack", *release_shell_utilities,
         )
     }
+    tlapm_root = runtime_sources / "tlapm-distribution"
+    tlapm = executable(tlapm_root / "bin" / "tlapm", "tlapm fixture 1")
+    tlapm_stdlib = tlapm_root / "lib" / "tlapm" / "stdlib"
+    tlapm_stdlib.mkdir(parents=True, mode=0o700)
+    (tlapm_stdlib / "Fixture.tla").write_bytes(b"---- MODULE Fixture ----\n")
+    tlapm_backend = executable(
+        tlapm_root / "lib" / "tlapm" / "backends" / "bin" / "z3",
+        "z3 fixture 1",
+    )
+    apalache_root = runtime_sources / "apalache-distribution"
+    apalache = executable(
+        apalache_root / "bin" / "apalache-mc", "apalache fixture 0.52.2"
+    )
+    apalache_jar = apalache_root / "lib" / "apalache.jar"
+    apalache_jar.parent.mkdir(parents=True, mode=0o700)
+    apalache_jar.write_bytes(b"apalache jar fixture\n")
     framework_name = sysconfig.get_config_var("PYTHONFRAMEWORK")
     framework_python = (
         sys.platform == "darwin"
@@ -999,14 +1015,11 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
     tla2tools = runtime_sources / "tla2tools.jar"
     tla2tools.write_bytes(b"jar fixture\n")
     tla2tools.chmod(0o600)
-    tlapm_stdlib = runtime_sources / "tlapm-stdlib"
-    (tlapm_stdlib / "nested").mkdir(parents=True, mode=0o700)
-    (tlapm_stdlib / "nested" / "stdlib.tla").write_bytes(b"---- MODULE Fixture ----\n")
     sources = [
         ordinary["python3"], ordinary["git"], ordinary["ssh-keygen"], ordinary["bash"],
         runtime_helper,
-        cargo, rustc, ordinary["node"], swift, ordinary["tlapm"], java,
-        verus, cargo_verus, tla2tools, tlapm_stdlib,
+        cargo, rustc, ordinary["node"], swift, tlapm, apalache, java,
+        verus, cargo_verus, tla2tools,
         ordinary["git-upload-pack"], ordinary["git-index-pack"],
         *(ordinary[name] for name in release_shell_utilities),
     ]
@@ -1020,6 +1033,14 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
     )
     assert copy_result.returncode == 0, copy_result.stderr
+    assert (runtime / "tlapm-distribution/lib/tlapm/stdlib/Fixture.tla").is_file()
+    assert (runtime / "tlapm-distribution/lib/tlapm/backends/bin/z3").read_bytes() \
+        == tlapm_backend.read_bytes()
+    assert (runtime / "apalache-distribution/lib/apalache.jar").read_bytes() \
+        == apalache_jar.read_bytes()
+    assert (runtime / "bin/tlapm").resolve() == runtime / "tlapm-distribution/bin/tlapm"
+    assert (runtime / "bin/apalache-mc").resolve() \
+        == runtime / "apalache-distribution/bin/apalache-mc"
     runtime_document = json.loads(runtime_inventory.read_bytes())
     assert runtime_document["source_disclosure"] == "withheld"
     assert runtime_document["input_record_count"] == len(runtime_document["input_records"])

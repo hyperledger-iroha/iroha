@@ -1,5 +1,22 @@
 # Sumeragi v2 safety and liveness argument
 
+## Release-ledger status protocol
+
+The final ledger is precommitted at 44 `tlaps_proved`, 3
+`cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope`, with `machine_checked_completion: true`. This ordering is
+intentional: TLAPS, Verus, cross-tool, and trace evidence all bind the
+byte-exact final ledger, so changing statuses after proof execution would
+invalidate the evidence that justified them.
+
+The status precommit is not sufficient release evidence. The release wrapper
+must run every strict promotion target and its dependency cone against one
+clean signed commit, verify pinned Verus without cheating, derive the three
+cross-tool records and production-trace certificate, and validate the receipt
+and completion marker against the same commit, source manifest, and ledger
+digest. Historical sections below describe the earlier unproved states and
+remain provenance, not the current release claim.
+
 ## Revision-4 argument
 
 Revision 4 is a fresh-genesis protocol. For each frozen height context, let

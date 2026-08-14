@@ -1254,10 +1254,8 @@ impl CertifiedServeBarrier {
 
 /// Move-only authorization for one bounded older-I/O admission before an exact Serve target.
 ///
-/// Runtime decides whether this turn is needed from the current lifecycle
-/// census. The worker independently binds every admitted command to at most
-/// one strictly older lifecycle owner. Dropping the authorization always
-/// closes that transient queue aperture.
+/// Runtime selects the turn from current lifecycle census; the worker binds every admitted
+/// command to at most one older owner, and dropping it closes the transient aperture.
 #[must_use = "the exact Serve predecessor admission must remain live for its bounded turn"]
 pub(crate) struct CertifiedServePredecessorAdmissionV1 {
     queue: Arc<V2IoCommandQueue>,
@@ -1303,13 +1301,10 @@ impl Drop for CertifiedServePredecessorAdmissionV1 {
     }
 }
 
-/// One finite runner episode in which already-selected local producers may
-/// acquire I/O ownership.
+/// One finite runner episode for already-selected local producers.
 ///
-/// The episode does not hold the queue mutex. Its due/active handoff is changed
-/// under that mutex, so exact network admission either reserves before the
-/// final frozen Serve batch retires or returns `Busy` without becoming visible
-/// to fair ingress until this one producer episode finishes.
+/// Its due/active handoff stays under the queue mutex, so network admission remains `Busy` until
+/// the episode finishes.
 #[must_use]
 pub(crate) struct CertifiedServeProducerEpisode {
     queue: Arc<V2IoCommandQueue>,

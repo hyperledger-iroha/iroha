@@ -1023,14 +1023,25 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
+The final proof-ledger statuses are precommitted at 44 `tlaps_proved`, 3
+`cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope`, with `machine_checked_completion: true`. This is the required
+byte-exact input to the release proof wave, not proof evidence by itself. The
+next formal step is to freeze a clean signed tree, run the strict TLAPS and
+pinned Verus targets, derive the canonical cross-tool and production-trace
+evidence, and validate the release receipt and completion marker against that
+same commit and ledger digest.
+
 On the current tree, the independent 88-leg release inventory contract is
 sealed at 856 production tests across 40 modules, 525 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
-Fresh guard and mutation execution against this source is pending. The
-package-layout preflight and aggregate checker also bind the sole reviewed
-test-only `v2_core/refinement_cases.rs` source split and reject additional,
-parent-relative, non-test, or skipped-verifier mutations. Its focused pytest
-mutation execution remains pending while concurrent checker jobs are active.
+The aggregate non-release proof checker and focused direct-Serve, same-round,
+Serve-regression, and trace-link mutation tests pass. The remaining full
+production inventory, Rust, network, and release-proof execution must run
+against the final frozen tree. The package-layout preflight and aggregate
+checker also bind the sole reviewed test-only `v2_core/refinement_cases.rs`
+source split and reject additional, parent-relative, non-test, or
+skipped-verifier mutations.
 The broader `check_sumeragi_v2_multilane_models.py` structural gate now passes
 after binding Kura's whole-plan route preflight, all-manifest readback,
 transition-checked latest-index publication, configured evidence-byte bounds,
@@ -1050,9 +1061,11 @@ TODO are gone. The former carrier-silent Queue-install/startup-activation
 lifecycle-cursor marker is also gone: the four named recovery actions now have
 source-bound extraction seams and the open-action tuple is empty. This is
 structural source closure, not formal execution or release completion. The
-separate generic lifecycle-coordinator replacement remains intentionally
-unwired and is classified outside the current `ML-*` finish scope; that
-classification advances no ledger row or release gate.
+generic lifecycle coordinator now owns ordinary and recovered PendingKura
+production heights, including launch, bounded recovery, active turns,
+finalization, cleanup, and exact successor handoff. The old monolithic live
+height loop and persistent predecessor witness/episode path are retired; the
+remaining work is execution and release evidence, not runner wiring.
 The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
@@ -1171,7 +1184,8 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 856-test,
+  mutations before release evidence is accepted, then finish the remaining
+  856-test,
   40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -1209,9 +1223,9 @@ Prior bounded formal support remains recorded for source manifest
 direct TLC positives, all 27 named mutations, and all three Apalache v0.52.2
 bounds passed after installing the checksum-pinned TLAPM standard library.
 That archived manifest does not attest the current generation-fencing source.
-`G-FORMAL` remains open pending proof-ledger/checker reconciliation, strict
-TLAPS, pinned Verus, the remaining mutation matrices, and a clean aggregate
-release receipt. The current pinned-seed TLC witness and all eight
+`G-FORMAL` remains open pending strict TLAPS, pinned Verus, the remaining
+mutation matrices, and a clean aggregate release receipt. The current
+pinned-seed TLC witness and all eight
 production-reducer replay tests are fresh and green at exactly 100 normalized
 actions; that trace result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
@@ -27258,8 +27272,8 @@ runtime premise on the final signed source.
   exact identities. Finalized-sidecar pruning retains winning data in the
   committed merge log and supersedes losing pending work. Manual,
   wrong-source, substituted, or otherwise untyped `Exact` output must remain
-  owned and fail closed. Promotion still requires the pinned Verus run and the
-  derived cross-tool evidence from this unchanged source;
+  owned and fail closed. Release acceptance still requires the pinned Verus
+  run and derived cross-tool evidence from this unchanged source;
 - preserve fresh strict evidence for the already-ledgered progress-ownership,
   Stage-2/3/4/5/6, Serve-FIFO, and aggregate protected-service-rank theorems.
   Their source bodies now include the doubled causal FIFO/source-cursor rank,
@@ -27274,7 +27288,8 @@ runtime premise on the final signed source.
   ownership, and source manifests are structurally sealed, but source binding
   is not backend proof evidence. Run pinned Verus with `--no-cheating`, bind
   the fresh strict provider log, and generate the canonical cross-tool
-  document before assigning `cross_tool_proved`;
+  document before the release gate accepts the precommitted
+  `cross_tool_proved` status;
 - keep the standalone effect-capacity mutation matrix green and source-bound.
   Its 6 compact models and 28 pinned configurations cover the concrete
   A/B/TimeoutVote capacity trace, full-capacity Fetch reconstruction,
@@ -27308,13 +27323,14 @@ runtime premise on the final signed source.
   conflation, replay retention or loss, stale execution, Prepare authority, and
   non-singleton replay. Bounded TLC and source binding still do not discharge
   `ProgressWitnessProductionRefinementObligation`;
-- discharge the nine TLAPS-target obligations in dependency order:
+- prove the nine precommitted TLAPS-target obligations in dependency order:
   post-GST deadlock freedom, post-GST starvation freedom, timeout/view
   liveness, rotating-leader liveness, retained-lock reproposal, per-validator
   application liveness, successor-activation starvation freedom, genesis
   successor handoff, and indexed height liveness. Each named theorem already
-  has a non-vacuous source proof body; none is promoted until its complete
-  final-source dependency cone has a fresh strict log. Rotation must reach a
+  has a non-vacuous source proof body. Its `tlaps_proved` ledger status is not
+  release evidence until the complete final-source dependency cone has a fresh
+  strict log. Rotation must reach a
   view in which the responsive honest scheduled leader itself is active (or
   decide first), and application is per responsive validator rather than a
   global apply barrier. The application proof composes the five exact
@@ -27322,14 +27338,14 @@ runtime premise on the final signed source.
   retained-lock release proof consumes independently established responsive
   Decision convergence and is rejected if it depends on any conditional
   direct-decomposition shard;
-- discharge the three production seams only as the canonical cross-tool
+- prove the three precommitted production seams only as the canonical cross-tool
   obligations: effective-lock body acquisition, durable progress-witness
   refinement, and successor activation plus exact historical recovery. Their
   `4 + 7 + 6` production claims require fresh strict provider logs, the pinned
   Verus result, exact source manifests, proved transitive prerequisites, and
-  the derived cross-tool evidence document. They may not be relabeled
-  `tlaps_proved`, inferred from source-fidelity tests, or replaced by bounded
-  TLC evidence;
+  the derived cross-tool evidence document. Their `cross_tool_proved` statuses
+  may not be inferred from source-fidelity tests or replaced by bounded TLC
+  evidence;
 - discharge the ledgered
   `SuccessorActivationStarvationFreedomObligation` by proving that every exact
   queued/running activation owned by a responsive validator has an enabled step
@@ -27357,7 +27373,7 @@ runtime premise on the final signed source.
   runtime, effect, and block-sync order. The conditional TLA+ refinement
   theorem has a proof body; the remaining release debt is its fresh strict
   provider log plus pinned Verus and canonical cross-tool evidence, after
-  successor-activation starvation freedom is promoted;
+  successor-activation starvation freedom has strict accepted evidence;
 - discharge the concrete genesis chain product's exact first-successor handoff,
   ledgered as `GenesisHeightSuccessorHandoffObligation`, only after
   rotating-leader, application liveness, successor-activation starvation, and

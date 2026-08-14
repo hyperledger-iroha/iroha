@@ -4971,7 +4971,6 @@ def build_production_trace_extraction_evidence(
             raise ValueError(
                 "cross-tool evidence does not link the exact backend evidence"
             )
-
     source_snapshot = _production_trace_extraction_source_snapshot(
         root_dir=root_dir, formal_dir=formal_dir
     )
