@@ -32,7 +32,7 @@ diving into the detailed specifications (`specs/nexus.md`,
 | Component | Description | Key references |
 |-----------|-------------|----------------|
 | **Data Space (DS)** | Governance-scoped execution domain that defines validator membership, privacy class, fee policy, and data-availability profile. Each DS owns one or more *lanes*. | `specs/nexus.md`, `specs/nexus_transition_notes.md` |
-| **Lane** | Deterministic shard of execution and state. Lane manifests declare validator sets, settlement hooks, telemetry metadata, and routing permissions. The global consensus ring orders lane commitments. | `specs/nexus_lanes.md` |
+| **Lane** | Deterministic logical shard of execution and state inside one data space. Lane manifests declare workload, settlement, telemetry, and routing policy; the V1 layout projects the owning data space's validator/DA policy and every lane in that data space must agree. The global consensus ring orders lane commitments. | `specs/nexus_lanes.md` |
 | **Space Directory** | Registry contract (and CLI helpers) that stores DS manifests, validator rotations, and capability grants. Keeps historical manifests signed so auditors can reconstruct state. | `specs/nexus.md#space-directory` |
 | **Lane Catalog** | Configuration section (`[nexus]` in `config.toml`) that maps lane IDs to aliases, routing policies, and retention knobs. Operators can introspect the effective catalog via `iroha3d --sora --config … --trace-config`. | `specs/sora_nexus_operator_onboarding.md` |
 | **Settlement Router** | Routes XOR movements between lanes (e.g., private CBDC lanes ↔ public liquidity lanes). Policy defaults live in `specs/cbdc_lane_playbook.md`. | `specs/cbdc_lane_playbook.md` |

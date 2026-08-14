@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -65,6 +66,18 @@ def _lane_dataspace_topology_checker_source() -> str:
     source = SCRIPT.read_text(encoding="utf-8")
     match = re.search(
         r"check_taira_lane_dataspace_topology\(\) \{.*?<<'PY'\n"
+        r"(?P<body>.*?)\nPY\n\}",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    return match.group("body")
+
+
+def _canonical_config_topology_checker_source() -> str:
+    source = SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"validate_canonical_taira_topology\(\) \{.*?<<'PY'\n"
         r"(?P<body>.*?)\nPY\n\}",
         source,
         re.DOTALL,
@@ -210,6 +223,35 @@ def _run_lane_dataspace_topology_checker(
     )
 
 
+def _run_canonical_config_topology_checker(
+    config_path: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "python3",
+            "-",
+            str(config_path),
+            "7",
+            "0",
+            "10",
+            "6647857470246403404",
+            "8477022798449861195",
+            "20",
+            "core",
+            "governance",
+            "zk",
+            "dpn",
+            "external-poc",
+            "boi-mobile",
+            "cbsi",
+        ],
+        input=_canonical_config_topology_checker_source(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _run_physical_dataspace_roster_checker(
     tmp_path: Path,
     status_payload: dict[str, object],
@@ -280,6 +322,7 @@ def _healthy_physical_dataspace_status() -> dict[str, object]:
     teu_lane_commit = []
     dataspace_catalog = []
     for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
+        manifest_required = lane_alias == "governance"
         has_manifest = lane_alias == "governance" or dataspace_alias != "universal"
         manifest_path = (
             f"/manifests/{lane_alias}.manifest.json" if has_manifest else None
@@ -290,7 +333,7 @@ def _healthy_physical_dataspace_status() -> dict[str, object]:
                 "alias": lane_alias,
                 "dataspace_id": dataspace_id,
                 "dataspace_alias": dataspace_alias,
-                "manifest_required": has_manifest,
+                "manifest_required": manifest_required,
                 "manifest_ready": has_manifest,
                 "manifest_path": manifest_path,
                 "manifest_validators": (
@@ -305,7 +348,7 @@ def _healthy_physical_dataspace_status() -> dict[str, object]:
                 "lane_alias": lane_alias,
                 "dataspace_id": dataspace_id,
                 "alias": dataspace_alias,
-                "manifest_required": has_manifest,
+                "manifest_required": manifest_required,
                 "manifest_ready": has_manifest,
                 "manifest_path": manifest_path,
             }
@@ -460,6 +503,112 @@ def test_lane_dataspace_topology_accepts_seven_lanes_on_five_dataspaces(
     }
 
 
+def test_canonical_config_topology_accepts_exact_routing_matcher_inventory() -> None:
+    config = ROOT / "configs" / "soranexus" / "taira" / "config.toml"
+
+    result = _run_canonical_config_topology_checker(config)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_canonical_config_topology_rejects_missing_extra_or_wrong_matcher(
+    tmp_path: Path,
+) -> None:
+    canonical = (
+        ROOT / "configs" / "soranexus" / "taira" / "config.toml"
+    ).read_text(encoding="utf-8")
+    external_poc_rule = """
+[[nexus.routing_policy.rules]]
+lane = 4
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+account = "*@wonderland.is"
+description = "Route the PoC authority to the private is dataspace"
+"""
+    assert external_poc_rule in canonical
+    cases = {
+        "missing": canonical.replace(external_poc_rule, "", 1),
+        "extra": canonical.replace(
+            "\n[nexus.fusion]\n",
+            external_poc_rule + "\n[nexus.fusion]\n",
+            1,
+        ),
+        # `wonderland` is a namespace bound to `is`; replacing the complete
+        # namespace-qualified matcher with the dataspace root conflates two
+        # independent topology layers and must fail closed.
+        "wrong-namespace-scope": canonical.replace(
+            'account = "*@wonderland.is"',
+            'account = "*@is"',
+            1,
+        ),
+    }
+
+    for name, mutated in cases.items():
+        config = tmp_path / f"{name}.toml"
+        config.write_text(mutated, encoding="utf-8")
+
+        result = _run_canonical_config_topology_checker(config)
+
+        assert result.returncode == 1, name
+        assert "expected exact routing matcher tuples" in result.stderr, (
+            name,
+            result.stderr,
+        )
+
+
+def test_canonical_topology_environment_overrides_are_ignored() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    assignments, separator, _rest = source.partition("\nusage() {")
+    assert separator
+    variable_names = [
+        "EXPECTED_TAIRA_LANE_COUNT",
+        "EXPECTED_UNIVERSAL_DATASPACE_ID",
+        "EXPECTED_DPN_DATASPACE_ID",
+        "EXPECTED_IS_DATASPACE_ID",
+        "EXPECTED_IS2_DATASPACE_ID",
+        "EXPECTED_CBSI_DATASPACE_ID",
+        "EXPECTED_CORE_ROUTE_ALIAS",
+        "EXPECTED_GOVERNANCE_ROUTE_ALIAS",
+        "EXPECTED_ZK_ROUTE_ALIAS",
+        "EXPECTED_DPN_ROUTE_ALIAS",
+        "EXPECTED_IS_ROUTE_ALIAS",
+        "EXPECTED_IS2_ROUTE_ALIAS",
+        "EXPECTED_CBSI_ROUTE_ALIAS",
+    ]
+    expected = [
+        "7",
+        "0",
+        "10",
+        "6647857470246403404",
+        "8477022798449861195",
+        "20",
+        "core",
+        "governance",
+        "zk",
+        "dpn",
+        "external-poc",
+        "boi-mobile",
+        "cbsi",
+    ]
+    probe = assignments + "\nprintf '%s\\n' " + " ".join(
+        f'"${{{name}}}"' for name in variable_names
+    )
+    environment = os.environ.copy()
+    environment.update({name: "hostile-override" for name in variable_names})
+
+    result = subprocess.run(
+        ["bash", "-c", probe],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == expected
+
+
 def test_lane_dataspace_topology_rejects_lane_count_regression(
     tmp_path: Path,
 ) -> None:
@@ -492,9 +641,10 @@ def test_lane_dataspace_topology_rejects_governance_or_zk_dataspaces(
 def test_physical_dataspace_rosters_accept_distinct_manifest_cohorts(
     tmp_path: Path,
 ) -> None:
+    status = _healthy_physical_dataspace_status()
     result = _run_physical_dataspace_roster_checker(
         tmp_path,
-        _healthy_physical_dataspace_status(),
+        status,
         _healthy_base_payload(),
     )
 
@@ -505,6 +655,69 @@ def test_physical_dataspace_rosters_accept_distinct_manifest_cohorts(
     assert summary["universal"]["inherited_lanes"] == ["core", "zk"]
     assert len(summary["dpn"]["members"]) == 4
     assert summary["dpn"]["quorum"] == 3
+    lanes = status["teu_lane_commit"]
+    assert isinstance(lanes, list)
+    for lane in lanes[3:]:
+        assert isinstance(lane, dict)
+        assert lane["manifest_required"] is False
+
+
+def test_physical_dataspace_rosters_require_ready_private_manifest_evidence(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("manifest_ready", False, "publishes a roster without a ready manifest"),
+        ("manifest_path", None, "publishes a roster without a manifest_path"),
+    )
+    for field, value, expected in cases:
+        status = _healthy_physical_dataspace_status()
+        lanes = status["teu_lane_commit"]
+        catalog = status["dataspace_catalog"]
+        assert isinstance(lanes, list) and isinstance(catalog, list)
+        dpn = lanes[3]
+        dpn_catalog = catalog[3]
+        assert isinstance(dpn, dict) and isinstance(dpn_catalog, dict)
+        assert dpn["manifest_required"] is False
+        dpn[field] = value
+        dpn_catalog[field] = value
+
+        result = _run_physical_dataspace_roster_checker(
+            tmp_path, status, _healthy_base_payload()
+        )
+
+        assert result.returncode == 1
+        assert expected in result.stderr
+
+
+def test_physical_dataspace_rosters_reject_required_manifest_without_roster(
+    tmp_path: Path,
+) -> None:
+    status = _healthy_physical_dataspace_status()
+    lanes = status["teu_lane_commit"]
+    catalog = status["dataspace_catalog"]
+    assert isinstance(lanes, list) and isinstance(catalog, list)
+    governance = lanes[1]
+    governance_catalog = catalog[1]
+    assert isinstance(governance, dict) and isinstance(governance_catalog, dict)
+    governance.update(
+        {
+            "manifest_ready": False,
+            "manifest_path": None,
+            "manifest_validators": [],
+            "manifest_quorum": None,
+        }
+    )
+    governance_catalog.update({"manifest_ready": False, "manifest_path": None})
+
+    result = _run_physical_dataspace_roster_checker(
+        tmp_path, status, _healthy_base_payload()
+    )
+
+    assert result.returncode == 1
+    assert (
+        "lane 'governance' requires a ready manifest with a non-empty validator roster"
+        in result.stderr
+    )
 
 
 def test_physical_dataspace_rosters_reject_universal_without_manifest_membership(

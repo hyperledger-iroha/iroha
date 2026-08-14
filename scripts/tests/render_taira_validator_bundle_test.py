@@ -35,7 +35,7 @@ TAIRA_CITIZEN_ID = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽ
 TAIRA_GENESIS_DEPLOYER_ID = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 TAIRA_GAS_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 TAIRA_CONSENSUS_FINGERPRINT = (
-    "0x341dc1312934c312e6fb5cc8fab0902acaa54c2ce3d60fd67ddac8969eea0a54"
+    "0x6679f78af39ad62147e20c504d21eadb579a9840fda4979e67b6b623d218cf37"
 )
 TAIRA_FEE_SPONSOR_SELECTORS = [
     "iroha.log",
@@ -211,9 +211,9 @@ def test_taira_bounds_each_shared_host_validator_storage_budget() -> None:
 
     assert storage["local_budget_bytes"] == 64 * 1024 * 1024 * 1024
     assert storage["disk_budget_weights"] == {
-        "kura_blocks_bps": 7_500,
+        "kura_blocks_bps": 7_499,
         "wsv_snapshots_bps": 2_000,
-        "sorafs_bps": 0,
+        "sorafs_bps": 1,
         "soranet_spool_bps": 250,
         "soravpn_spool_bps": 250,
     }

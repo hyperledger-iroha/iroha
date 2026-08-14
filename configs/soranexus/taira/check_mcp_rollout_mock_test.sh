@@ -327,7 +327,9 @@ teu_lane_commit = []
 dataspace_catalog = []
 for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
     # Core and ZK inherit the universal cohort selected by governance. Every
-    # non-universal physical dataspace must project its own ready manifest.
+    # non-universal physical dataspace projects its own ready manifest even
+    # though only the governed governance lane marks a manifest as required.
+    manifest_required = lane_alias == "governance"
     has_manifest = lane_alias == "governance" or dataspace_alias != "universal"
     if scenario == "fleet_missing_universal_roster" and dataspace_alias == "universal":
         has_manifest = False
@@ -349,7 +351,7 @@ for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
         "alias": lane_alias,
         "dataspace_id": dataspace_id,
         "dataspace_alias": dataspace_alias,
-        "manifest_required": has_manifest,
+        "manifest_required": manifest_required,
         "manifest_ready": has_manifest,
         "manifest_path": manifest_path,
         "manifest_validators": validators,
@@ -361,7 +363,7 @@ for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
         "lane_alias": lane_alias,
         "dataspace_id": dataspace_id,
         "alias": dataspace_alias,
-        "manifest_required": has_manifest,
+        "manifest_required": manifest_required,
         "manifest_ready": has_manifest,
         "manifest_path": manifest_path,
     })
@@ -884,7 +886,7 @@ run_case fleet_commit_mismatch 'disagrees with validator-1 on committed_block_ha
 run_case fleet_dataspace_mismatch 'Taira lane/dataspace topology mismatch'
 run_case fleet_catalog_changes_between_samples 'disagrees with validator-1 on dataspace_catalog'
 run_case fleet_missing_dataspace_roster "physical dataspace 'cbsi' lacks a non-empty manifest validator roster"
-run_case fleet_missing_universal_roster "physical dataspace 'universal' lacks a non-empty ready manifest validator roster"
+run_case fleet_missing_universal_roster "lane 'governance' requires a ready manifest with a non-empty validator roster"
 run_case fleet_invalid_dataspace_quorum "lane 'dpn' manifest quorum 2 is invalid for 4 validators"
 run_case fleet_repeated_dataspace_roster "physical dataspaces 'is' and 'is2' reuse the same validator roster"
 run_case fleet_repeated_universal_roster "physical dataspaces 'universal' and 'dpn' reuse the same validator roster"

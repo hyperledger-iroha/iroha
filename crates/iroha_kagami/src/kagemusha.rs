@@ -2180,7 +2180,7 @@ impl VerificationReportV4 {
             generation_memory_enforcement_profile: report
                 .generation_memory_enforcement_profile
                 .clone(),
-            network_id: report.network_id,
+            network_id: report.network_id.clone(),
             asset_definition_id: report.asset_definition_id.clone(),
             asset_scale: report.asset_scale,
             bridge_abi_version: report.bridge_abi_version,

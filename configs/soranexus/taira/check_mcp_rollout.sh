@@ -21,19 +21,22 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_FAUCET_ASSET_ID="${ROLLOUT_CANARY_FAUCET_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
-EXPECTED_TAIRA_LANE_COUNT="${EXPECTED_TAIRA_LANE_COUNT:-7}"
-EXPECTED_UNIVERSAL_DATASPACE_ID="${EXPECTED_UNIVERSAL_DATASPACE_ID:-0}"
-EXPECTED_DPN_DATASPACE_ID="${EXPECTED_DPN_DATASPACE_ID:-10}"
-EXPECTED_IS_DATASPACE_ID="${EXPECTED_IS_DATASPACE_ID:-6647857470246403404}"
-EXPECTED_IS2_DATASPACE_ID="${EXPECTED_IS2_DATASPACE_ID:-8477022798449861195}"
-EXPECTED_CBSI_DATASPACE_ID="${EXPECTED_CBSI_DATASPACE_ID:-20}"
-EXPECTED_CORE_ROUTE_ALIAS="${EXPECTED_CORE_ROUTE_ALIAS:-core}"
-EXPECTED_GOVERNANCE_ROUTE_ALIAS="${EXPECTED_GOVERNANCE_ROUTE_ALIAS:-governance}"
-EXPECTED_ZK_ROUTE_ALIAS="${EXPECTED_ZK_ROUTE_ALIAS:-zk}"
-EXPECTED_DPN_ROUTE_ALIAS="${EXPECTED_DPN_ROUTE_ALIAS:-dpn}"
-EXPECTED_IS_ROUTE_ALIAS="${EXPECTED_IS_ROUTE_ALIAS:-external-poc}"
-EXPECTED_IS2_ROUTE_ALIAS="${EXPECTED_IS2_ROUTE_ALIAS:-boi-mobile}"
-EXPECTED_CBSI_ROUTE_ALIAS="${EXPECTED_CBSI_ROUTE_ALIAS:-cbsi}"
+# Release topology is repository policy, not an operator override. Keep these
+# constants immutable so an environment cannot redefine the topology that this
+# gate claims to validate.
+readonly EXPECTED_TAIRA_LANE_COUNT=7
+readonly EXPECTED_UNIVERSAL_DATASPACE_ID=0
+readonly EXPECTED_DPN_DATASPACE_ID=10
+readonly EXPECTED_IS_DATASPACE_ID=6647857470246403404
+readonly EXPECTED_IS2_DATASPACE_ID=8477022798449861195
+readonly EXPECTED_CBSI_DATASPACE_ID=20
+readonly EXPECTED_CORE_ROUTE_ALIAS="core"
+readonly EXPECTED_GOVERNANCE_ROUTE_ALIAS="governance"
+readonly EXPECTED_ZK_ROUTE_ALIAS="zk"
+readonly EXPECTED_DPN_ROUTE_ALIAS="dpn"
+readonly EXPECTED_IS_ROUTE_ALIAS="external-poc"
+readonly EXPECTED_IS2_ROUTE_ALIAS="boi-mobile"
+readonly EXPECTED_CBSI_ROUTE_ALIAS="cbsi"
 ROLLOUT_CANARY_FEE_PROGRAM_ID="${ROLLOUT_CANARY_FEE_PROGRAM_ID:-testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default}"
 ROLLOUT_CANARY_FEE_PROGRAM_REVISION="${ROLLOUT_CANARY_FEE_PROGRAM_REVISION:-1}"
 ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
@@ -405,20 +408,72 @@ if routing_policy.get("default_dataspace") != "universal":
 rules = routing_policy.get("rules")
 if not isinstance(rules, list):
     fail("nexus.routing_policy.rules is not an array")
-dataspace_by_lane = {lane_id: dataspace for lane_id, _, dataspace, _ in expected_lanes}
+expected_rules = [
+    (3, "dpn", "account", "*@dpn"),
+    (4, "is", "account", "*@wonderland.is"),
+    (5, "is2", "account", "*@boi.is2"),
+    (5, "is2", "account", "*@leumi.is2"),
+    (5, "is2", "account", "*@hapoalim.is2"),
+    (5, "is2", "account", "*@discount.is2"),
+    (5, "is2", "account", "*@mizrahi.is2"),
+    (5, "is2", "account", "*@fibi.is2"),
+    (5, "is2", "account", "*@onezero.is2"),
+    (5, "is2", "account", "*@jerusalem.is2"),
+    (6, "cbsi", "account", "*@cbsi"),
+    (6, "cbsi", "account", "*@pob.cbsi"),
+    (6, "cbsi", "account", "*@bred.cbsi"),
+    (6, "cbsi", "account", "*@anz.cbsi"),
+    (6, "cbsi", "account", "*@bsp.cbsi"),
+    (6, "cbsi", "account", "*@m-selen.cbsi"),
+    (6, "cbsi", "account", "*@ezipei.cbsi"),
+    (1, "universal", "instruction", "governance"),
+    (2, "universal", "instruction", "smartcontract::deploy"),
+]
+observed_rules = []
 for position, rule in enumerate(rules):
     if not isinstance(rule, dict):
         fail(f"nexus.routing_policy.rules[{position}] is not a table")
     lane_id = rule.get("lane")
     dataspace = rule.get("dataspace")
-    if isinstance(lane_id, bool) or lane_id not in dataspace_by_lane:
-        fail(f"nexus.routing_policy.rules[{position}] has unknown lane {lane_id!r}")
-    expected_dataspace = dataspace_by_lane[lane_id]
-    if dataspace != expected_dataspace:
+    matcher = rule.get("matcher")
+    if isinstance(lane_id, bool) or not isinstance(lane_id, int):
+        fail(f"nexus.routing_policy.rules[{position}].lane is not an integer")
+    if not isinstance(dataspace, str) or not dataspace:
+        fail(f"nexus.routing_policy.rules[{position}].dataspace is empty")
+    if not isinstance(matcher, dict):
+        fail(f"nexus.routing_policy.rules[{position}].matcher is not a table")
+    unknown_matcher_fields = set(matcher) - {"account", "instruction", "description"}
+    if unknown_matcher_fields:
         fail(
-            f"nexus.routing_policy.rules[{position}] maps lane {lane_id} to "
-            f"{dataspace!r}, expected {expected_dataspace!r}"
+            f"nexus.routing_policy.rules[{position}].matcher has unsupported fields "
+            f"{sorted(unknown_matcher_fields)!r}"
         )
+    selectors = [
+        (kind, matcher.get(kind))
+        for kind in ("account", "instruction")
+        if matcher.get(kind) is not None
+    ]
+    if len(selectors) != 1:
+        fail(
+            f"nexus.routing_policy.rules[{position}].matcher must contain exactly "
+            "one account or instruction selector"
+        )
+    matcher_kind, matcher_value = selectors[0]
+    if not isinstance(matcher_value, str) or not matcher_value:
+        fail(
+            f"nexus.routing_policy.rules[{position}].matcher.{matcher_kind} is empty"
+        )
+    description = matcher.get("description")
+    if description is not None and (
+        not isinstance(description, str) or not description
+    ):
+        fail(f"nexus.routing_policy.rules[{position}].matcher.description is empty")
+    observed_rules.append((lane_id, dataspace, matcher_kind, matcher_value))
+if observed_rules != expected_rules:
+    fail(
+        f"expected exact routing matcher tuples {expected_rules!r}, "
+        f"observed {observed_rules!r}"
+    )
 PY
 }
 
@@ -1970,14 +2025,16 @@ if not isinstance(topology, dict):
 
 expected_lanes = topology.get("lanes")
 expected_dataspaces = topology.get("dataspaces")
+physical_dataspace_order = ("universal", "dpn", "is", "is2", "cbsi")
 if not isinstance(expected_lanes, list) or not isinstance(expected_dataspaces, dict):
     fail("canonical topology summary omitted lanes or dataspaces")
-if set(expected_dataspaces) != {"universal", "dpn", "is", "is2", "cbsi"}:
+if set(expected_dataspaces) != set(physical_dataspace_order):
     fail("canonical topology summary did not contain exactly five physical dataspaces")
 
 expected_by_lane = {}
 dataspace_alias_by_id = {}
-for alias, dataspace_id in expected_dataspaces.items():
+for alias in physical_dataspace_order:
+    dataspace_id = expected_dataspaces[alias]
     require_nonnegative_int(dataspace_id, f"dataspaces.{alias}")
     if dataspace_id in dataspace_alias_by_id:
         fail(f"physical dataspaces {alias!r} and {dataspace_alias_by_id[dataspace_id]!r} share an ID")
@@ -2048,7 +2105,7 @@ if set(catalog_by_lane) != set(expected_by_lane):
         f"the canonical IDs {sorted(expected_by_lane)!r}"
     )
 
-projections = {alias: [] for alias in expected_dataspaces}
+projections = {alias: [] for alias in physical_dataspace_order}
 for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.items():
     lane = teu_by_lane[lane_id]
     entry = catalog_by_lane[lane_id]
@@ -2111,12 +2168,17 @@ for lane_id, (lane_alias, dataspace_id, dataspace_alias) in expected_by_lane.ite
                 f"lane {lane_alias!r} manifest quorum {quorum} is invalid for "
                 f"{len(roster)} validators; expected {minimum_quorum}..{len(roster)}"
             )
-        if lane.get("manifest_required") is not True or lane.get("manifest_ready") is not True:
-            fail(f"lane {lane_alias!r} publishes a roster without a ready required manifest")
+        if lane.get("manifest_ready") is not True:
+            fail(f"lane {lane_alias!r} publishes a roster without a ready manifest")
         if not isinstance(lane_manifest_path, str) or not lane_manifest_path.strip():
             fail(f"lane {lane_alias!r} publishes a roster without a manifest_path")
     elif quorum is not None:
         fail(f"lane {lane_alias!r} publishes manifest_quorum without validators")
+    elif lane.get("manifest_required") is True:
+        fail(
+            f"lane {lane_alias!r} requires a ready manifest with a non-empty "
+            "validator roster"
+        )
     projections[dataspace_alias].append(
         {
             "lane_id": lane_id,
@@ -2161,7 +2223,8 @@ if not isinstance(context_id, list) or not context_id or any(
     fail("/v1/sumeragi/status.height_context_id is not a non-empty identity array")
 
 rosters = {}
-for dataspace_alias, lane_projections in projections.items():
+for dataspace_alias in physical_dataspace_order:
+    lane_projections = projections[dataspace_alias]
     nonempty = [projection for projection in lane_projections if projection["members"]]
     if dataspace_alias != "universal" and len(nonempty) != len(lane_projections):
         missing = sorted(
@@ -2212,7 +2275,8 @@ for dataspace_alias, lane_projections in projections.items():
             ),
         }
 seen_manifest_rosters = {}
-for dataspace_alias, roster in rosters.items():
+for dataspace_alias in physical_dataspace_order:
+    roster = rosters[dataspace_alias]
     members = roster.get("members")
     fingerprint = tuple(members)
     previous = seen_manifest_rosters.get(fingerprint)
